@@ -1,13 +1,13 @@
 #![allow(dead_code)]
 
 use logos::Logos;
-use std::error;
 use std::fmt;
+use std::iter::Iterator;
+use std::ops::Range;
 
 #[derive(Logos, Debug, PartialEq)]
-#[logos(skip r"[ \t\n\f]+")] // Ignore this regex pattern between tokens
+#[logos(skip r"[ \t\n\f]+")] 
 pub enum Token {
-    // Tokens can be literal strings, of any length.
     #[token("=")]
     Assign,
 
@@ -30,63 +30,58 @@ pub enum Token {
     #[regex("[0-9]+", |lex| lex.slice().parse().ok())]
     #[regex(r"(([0-9]+)(\.[0-9]+))", |lex| lex.slice().parse().ok())]
     Num(f64),
+
+    LexErr(String),
 }
 
-pub trait TokenIter: std::iter::Iterator<Item = Result<Token, ()>> {
+pub trait TokenIter: Iterator<Item = (Token, Range<usize>)> {
     fn peek(&mut self) -> Option<&Self::Item>;
 }
-//Item = Result<Token, ()>
 
-impl<I: std::iter::Iterator<Item = Result<Token, ()>>> TokenIter for std::iter::Peekable<I> {
+impl<I: Iterator<Item = (Token, Range<usize>)>> TokenIter for std::iter::Peekable<I> {
     fn peek(&mut self) -> Option<&Self::Item> {
         std::iter::Peekable::peek(self)
     }
 }
 
-//impl<I: std::iter::Iterator> TokenIter for std::iter::Peekable<I> {
-//    fn peek(&mut self) -> Option<&Self::Item> {
-//        std::iter::Peekable::peek(self)
-//    }
-//}
 
 #[derive(Debug, Default)]
 struct Error {
     msg: String,
 }
 
-impl Error {
-    fn from(&mut self, msg: String) -> Self {
-        Error {msg}
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.msg)
-    }
-}
-
-impl error::Error for Error {}
-
 #[derive(Debug, PartialEq)]
-enum Node {
+enum NodeType {
     Add(Box<Node>, Box<Node>),
     Sub(Box<Node>, Box<Node>),
     Mul(Box<Node>, Box<Node>),
     Div(Box<Node>, Box<Node>),
     Unit(String),
     Num(f64),
+
+    UnrySub(Box<Node>),
+}
+
+#[derive(Debug, PartialEq)]
+struct Node {
+    typ: NodeType,
+    range: Range<usize>,
 }
 
 impl Node {
-    fn to_string(&self) -> String {
-        use Node::*;
+    fn new(typ: NodeType, range: Range<usize>) -> Self {
+        Node {typ, range}
+    }
 
-        match self {
+    fn to_string(&self) -> String {
+        use NodeType::*;
+
+        match &self.typ {
             Add(l, r) => format!("{} + {}", l, r),
             Sub(l, r) => format!("{} - {}", l, r),
             Mul(l, r) => format!("{} * {}", l, r),
             Div(l, r) => format!("{} / {}", l, r),
+            UnrySub(v) => format!("- {v}"),
             Unit(name) => name.to_string(),
             Num(num) => num.to_string(),
         }
@@ -99,48 +94,47 @@ impl fmt::Display for Node {
     }
 }
 
-fn atom<I>(iter: &mut I) -> Result<Node, ()> 
-    where
-        I: TokenIter,
+fn atom<I: TokenIter>(iter: &mut I) -> Result<Node, String> 
 {
-    use Token::*;
+    assert!(iter.peek().is_some());
 
-    if iter.peek().is_none() {
-        return Err(())
-    }
-    let tok = iter.next().unwrap();
-    let tok = tok?;
+    let (tok, range) = iter.next().unwrap();
 
-    match tok {
-        Unit(name) => Ok(Node::Unit(name)),
-        Num(f64) => Ok(Node::Num(f64)),
+    let typ = match tok {
+        Token::Unit(name) => NodeType::Unit(name),
+        Token::Num(f64) => NodeType::Num(f64),
+        Token::LexErr(msg) => return Err(msg),
+
+        Token::Sub => NodeType::UnrySub(Box::new(parse_expr(iter)?)),
+
         _ => panic!("atom should not be called with {:?}", tok)
-    }
+    };
+
+    Ok(Node::new(typ, range))
 }
 
-macro_rules! unwrap_or_ret {
-    ($e: expr, $err: expr) => {{
-        let n = $e;
-        if n.is_none() {
-            return Err($err);
-        }
-        n.unwrap()
-    }};
-}
-
-fn parse_expr<I>(iter: &mut I) -> Result<Node, ()> 
-    where
-        I: TokenIter,
+fn parse_expr<I: TokenIter>(iter: &mut I) -> Result<Node, String> 
 {
-    let tok = unwrap_or_ret!(iter.next(), ())?;
-    Err(())
+    atom(iter)
+}
+
+fn lex_code<'a>(code: &'a str) -> impl TokenIter + 'a {
+    let lex = Token::lexer(code);
+
+    lex.spanned().map(|(tok, rang)| 
+    (match tok {
+        Ok(v) => v,
+        Err(_) => Token::LexErr(code[rang.clone()].to_owned()),
+    }, rang)
+    ).peekable()
 }
 
 fn main() {
     let code: &str = "mm * u";
-    let lex = Token::lexer(code);
-    let mut iter = lex.into_iter().peekable();
 
-    println!("{:?}", parse_expr(&mut iter));
+    let mut iter = lex_code(code);
+
+    println!("{:?}", parse_expr(&mut iter).map(|x| x.to_string()));
+    //println!("{:?}", parse_expr(&mut iter));
     //print!("{:?}", parse(&mut lex));
 }
