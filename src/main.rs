@@ -5,24 +5,93 @@ use std::fmt;
 use std::iter::Iterator;
 use std::ops::Range;
 
-#[derive(Logos, Debug, PartialEq)]
-#[logos(skip r"[ \t\n\f]+")] 
-pub enum Token {
-    #[token("=")]
-    Assign,
+use paste::paste;
 
+#[macro_export]
+macro_rules! enum_or {
+
+    ($x:pat) => {
+        paste!(Self::$x)
+    };
+
+    ($x1:pat, $($x2:pat),*) => {
+        paste!(Self::$x1) | enum_or!($($x2),*)
+    };
+}
+
+#[macro_export]
+macro_rules! enum_match {
+
+    ($self:ident, $default:expr, $n:expr,) => {$default};
+
+    ($self:ident, $default:expr, $n:expr, [$($x1:pat),*] $([$($x2:pat),*])*) => {
+
+        if let enum_or!($($x1),*) = $self {
+            $n
+        } else {
+            enum_match!($self, $default, $n+1, $([$($x2),*])*)
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! priority_func {
+
+    ($name:tt -> $typ:ty, $default:expr, $([$($x:pat),*])*) =>
+    {
+        pub fn $name(&self) -> $typ {
+            enum_match!(self, $default, $default + 1, $([$($x),*])*)
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! assign_func {
+
+    ($name: tt -> $typ:ty, $default: expr, $([$val:expr; $($x2:pat),*])*) => {
+        pub fn $name(&self) -> $typ {
+            #[allow(unreachable_patterns)]
+            match self {
+                $($(paste!(Self::$x2))|* => $val,)*
+                    _ => $default,
+            }
+        }
+    };
+}
+
+#[derive(Logos, Debug, PartialEq, Clone)]
+#[logos(skip r"[ \t\n\f]+")]
+pub enum Token {
     #[token("*")]
     Mul,
     #[token("/")]
     Div,
     #[token("+")]
     Add,
+    #[token("++")]
+    AddAdd,
     #[token("-")]
     Sub,
+    #[token("--")]
+    SubSub,
     #[token("(")]
+    #[token("=")]
+    Assign,
+    #[token("+=")]
+    AddEq,
+    #[token("-=")]
+    SubEq,
+    #[token("*=")]
+    MulEq,
+    #[token("/=")]
+    DivEq,
+
     LParen,
     #[token(")")]
     RParen,
+
+    #[regex("def")]
+    Def,
 
     #[regex("[a-zA-Z]+", |lex| lex.slice().to_owned())]
     Unit(String),
@@ -32,6 +101,19 @@ pub enum Token {
     Num(f64),
 
     LexErr(String),
+    EOF,
+}
+
+impl Token {
+    priority_func!(precedence -> i32, 0,
+        [Assign, AddEq, SubEq, MulEq, DivEq]
+        [Add, Sub]
+        [Mul, Div]
+    );
+
+    fn is_op(&self) -> bool {
+        self.precedence() != 0
+    }
 }
 
 pub trait TokenIter: Iterator<Item = (Token, Range<usize>)> {
@@ -43,7 +125,6 @@ impl<I: Iterator<Item = (Token, Range<usize>)>> TokenIter for std::iter::Peekabl
         std::iter::Peekable::peek(self)
     }
 }
-
 
 #[derive(Debug, Default)]
 struct Error {
@@ -70,7 +151,7 @@ struct Node {
 
 impl Node {
     fn new(typ: NodeType, range: Range<usize>) -> Self {
-        Node {typ, range}
+        Node { typ, range }
     }
 
     fn to_string(&self) -> String {
@@ -94,8 +175,7 @@ impl fmt::Display for Node {
     }
 }
 
-fn atom<I: TokenIter>(iter: &mut I) -> Result<Node, String> 
-{
+fn atom<I: TokenIter>(iter: &mut I) -> Result<Node, String> {
     assert!(iter.peek().is_some());
 
     let (tok, range) = iter.next().unwrap();
@@ -107,26 +187,106 @@ fn atom<I: TokenIter>(iter: &mut I) -> Result<Node, String>
 
         Token::Sub => NodeType::UnrySub(Box::new(parse_expr(iter)?)),
 
-        _ => panic!("atom should not be called with {:?}", tok)
+        _ => panic!("atom should not be called with {:?}", tok),
     };
 
     Ok(Node::new(typ, range))
 }
 
-fn parse_expr<I: TokenIter>(iter: &mut I) -> Result<Node, String> 
-{
-    atom(iter)
+macro_rules! check_for_eof {
+    ($e: expr) => {
+        match $e {
+            None => return Err("no EOF at the end of token stream!".to_string()),
+            Some((Token::EOF, _)) => true,
+            _ => false,
+        }
+    };
 }
 
-fn lex_code<'a>(code: &'a str) -> impl TokenIter + 'a {
+fn apply_op(op: Token, lhs: Node, rhs: Node) -> Node {
+    let range = lhs.range.start..rhs.range.end;
+
+    use Token::*;
+
+    Node::new(
+        match op {
+            Add => NodeType::Add(lhs.into(), rhs.into()),
+            Sub => NodeType::Sub(lhs.into(), rhs.into()),
+            Mul => NodeType::Mul(lhs.into(), rhs.into()),
+            Div => NodeType::Div(lhs.into(), rhs.into()),
+            _ => panic!("apply_op called with: {:?}", op),
+        },
+        range,
+    )
+}
+
+fn parse_sub_expr<I: TokenIter>(
+    iter: &mut I,
+    mut lhs: Node,
+    precedence: i32,
+) -> Result<Node, String> {
+    if check_for_eof!(iter.peek()) {
+        return Ok(lhs);
+    }
+
+    let mut lookahead = iter.peek().unwrap().0.clone();
+
+    while lookahead.is_op() && lookahead.precedence() > precedence {
+        let op = lookahead;
+
+        iter.next();
+        if check_for_eof!(iter.peek()) {
+            return Ok(lhs);
+        }
+
+        let mut rhs = atom(iter)?;
+
+        if check_for_eof!(iter.peek()) {
+            lhs = apply_op(op, lhs, rhs);
+            break;
+        }
+
+        lookahead = iter.peek().unwrap().0.clone();
+
+        while lookahead.is_op() && lookahead.precedence() > op.precedence() {
+            rhs = parse_sub_expr(iter, rhs, op.precedence())?;
+
+            if check_for_eof!(iter.peek()) {
+                break;
+            }
+            lookahead = iter.peek().unwrap().0.clone();
+        }
+
+        lhs = apply_op(op, lhs, rhs);
+    }
+
+    Ok(lhs)
+}
+
+fn parse_expr<I: TokenIter>(iter: &mut I) -> Result<Node, String> {
+    if iter.peek().is_none() {
+        return Err("no EOF at the end of token stream!".to_string());
+    }
+
+    let lhs = atom(iter)?;
+    parse_sub_expr(iter, lhs, -1)
+}
+
+fn lex_code(code: &str) -> impl TokenIter + '_ {
     let lex = Token::lexer(code);
 
-    lex.spanned().map(|(tok, rang)| 
-    (match tok {
-        Ok(v) => v,
-        Err(_) => Token::LexErr(code[rang.clone()].to_owned()),
-    }, rang)
-    ).peekable()
+    lex.spanned()
+        .map(|(tok, rang)| {
+            (
+                match tok {
+                    Ok(v) => v,
+                    Err(_) => Token::LexErr(code[rang.clone()].to_owned()),
+                },
+                rang,
+            )
+        })
+        .chain(std::iter::once((Token::EOF, 0..0)))
+        .peekable()
 }
 
 fn main() {
