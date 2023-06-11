@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use logos::Logos;
-use std::fmt;
+use std::fmt::Display;
 use std::iter::Iterator;
 use std::ops::Range;
 
@@ -104,6 +104,33 @@ pub enum Token {
     EOF,
 }
 
+impl Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let res = match self {
+            Token::Mul => "*".to_string(),
+            Token::Div => "/".to_string(),
+            Token::Add => "+".to_string(),
+            Token::AddAdd => "++".to_string(),
+            Token::Sub => "-".to_string(),
+            Token::SubSub => "--".to_string(),
+            Token::Assign => "=".to_string(),
+            Token::AddEq => "+=".to_string(),
+            Token::SubEq => "-=".to_string(),
+            Token::MulEq => "*=".to_string(),
+            Token::DivEq => "/=".to_string(),
+            Token::LParen => "(".to_string(),
+            Token::RParen => ")".to_string(),
+            Token::Def => "def".to_string(),
+            Token::Unit(name) => name.to_string(),
+            Token::Num(v) => v.to_string(),
+            Token::LexErr(err) => err.to_string(),
+            Token::EOF => "EOF".to_string(),
+        };
+
+        write!(f, "{}", res)
+    }
+}
+
 impl Token {
     priority_func!(precedence -> i32, 0,
         [Assign, AddEq, SubEq, MulEq, DivEq]
@@ -133,6 +160,8 @@ struct Error {
 
 #[derive(Debug, PartialEq)]
 enum NodeType {
+    Def(String),
+
     Add(Box<Node>, Box<Node>),
     Sub(Box<Node>, Box<Node>),
     Mul(Box<Node>, Box<Node>),
@@ -158,21 +187,36 @@ impl Node {
         use NodeType::*;
 
         match &self.typ {
-            Add(l, r) => format!("{} + {}", l, r),
-            Sub(l, r) => format!("{} - {}", l, r),
-            Mul(l, r) => format!("{} * {}", l, r),
-            Div(l, r) => format!("{} / {}", l, r),
-            UnrySub(v) => format!("- {v}"),
+            Def(name) => format!("def {}", name),
+            Add(l, r) => format!("{} + {}", l.to_string(), r.to_string()),
+            Sub(l, r) => format!("{} - {}", l.to_string(), r.to_string()),
+            Mul(l, r) => format!("{} * {}", l.to_string(), r.to_string()),
+            Div(l, r) => format!("{} / {}", l.to_string(), r.to_string()),
+            UnrySub(v) => format!("- {}", v.to_string()),
             Unit(name) => name.to_string(),
             Num(num) => num.to_string(),
         }
     }
 }
 
-impl fmt::Display for Node {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.to_string())
+//impl fmt::Display for Node {
+//    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+//        write!(f, "{}", self.to_string())
+//    }
+//}
+
+fn parse_def<I: TokenIter>(iter: &mut I) -> Result<NodeType, String> {
+    let tok = iter.next();
+
+    if let Some((Token::Unit(name), _)) = tok {
+        return Ok(NodeType::Def(name));
+    } else if let Some((tok, _)) = tok {
+        return Err(format!("def expectes unit name, found: {}", tok));
+    } else {
+        assert!(false, "expected EOF");
     }
+
+    todo!();
 }
 
 fn atom<I: TokenIter>(iter: &mut I) -> Result<Node, String> {
@@ -184,6 +228,7 @@ fn atom<I: TokenIter>(iter: &mut I) -> Result<Node, String> {
         Token::Unit(name) => NodeType::Unit(name),
         Token::Num(f64) => NodeType::Num(f64),
         Token::LexErr(msg) => return Err(msg),
+        Token::Def => parse_def(iter)?,
 
         Token::Sub => NodeType::UnrySub(Box::new(parse_expr(iter)?)),
 
@@ -290,11 +335,11 @@ fn lex_code(code: &str) -> impl TokenIter + '_ {
 }
 
 fn main() {
-    let code: &str = "mm * u";
+    let code: &str = "def @";
 
     let mut iter = lex_code(code);
 
-    println!("{:?}", parse_expr(&mut iter).map(|x| x.to_string()));
+    println!("{:?}", parse_expr(&mut iter));
     //println!("{:?}", parse_expr(&mut iter));
     //print!("{:?}", parse(&mut lex));
 }
