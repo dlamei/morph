@@ -1,11 +1,11 @@
 #![allow(dead_code)]
 
-use std::fmt::Display;
 use chumsky::{
     input::{Stream, ValueInput},
     prelude::*,
 };
 use logos::Logos;
+use std::fmt::Display;
 
 #[derive(Logos, Debug, PartialEq, Clone)]
 #[logos(skip r"[ \t\n\f]+")]
@@ -22,7 +22,6 @@ pub enum Token<'a> {
     Sub,
     #[token("--")]
     SubSub,
-    #[token("(")]
     #[token("=")]
     Assign,
     #[token("+=")]
@@ -34,6 +33,7 @@ pub enum Token<'a> {
     #[token("/=")]
     DivEq,
 
+    #[token("(")]
     LParen,
     #[token(")")]
     RParen,
@@ -48,7 +48,7 @@ pub enum Token<'a> {
     #[regex(r"(([0-9]+)(\.[0-9]+))", |lex| lex.slice().parse().ok())]
     Num(f64),
 
-    Error,
+    Error(&'a str),
 }
 
 impl Display for Token<'_> {
@@ -70,7 +70,7 @@ impl Display for Token<'_> {
             Token::Def => "def".to_string(),
             Token::Unit(name) => name.to_string(),
             Token::Num(v) => v.to_string(),
-            Token::Error => "ERROR".to_string(),
+            Token::Error(msg) => format!("ERROR({})", msg),
         };
 
         write!(f, "{}", res)
@@ -92,7 +92,6 @@ enum Node {
 }
 
 impl Node {
-
     fn to_string(&self) -> String {
         use Node::*;
 
@@ -109,32 +108,84 @@ impl Node {
     }
 }
 
+macro_rules! replace_expected {
+    ($err: ident ::<$I: ty>, $exp_tok: expr) => {{
+        let found = $err
+            .found()
+            .map(|x| ::chumsky::util::MaybeRef::Val(x.to_owned()));
+        let exp = $exp_tok.map(|x| Some(chumsky::util::MaybeRef::Val(x)));
+        let span = $err.span().clone();
+        ::chumsky::error::Error::<$I>::replace_expected_found($err, exp, found, span)
+    }};
+}
 
-fn parser<'a, I>() -> impl Parser<'a, I, Node, extra::Err<Rich<'a, Token<'a>>>>
+type ParseError<'a> = Rich<'a, Token<'a>>;
+
+fn parser<'a, I>() -> impl Parser<'a, I, Node, extra::Err<ParseError<'a>>>
 where
     I: ValueInput<'a, Token = Token<'a>, Span = SimpleSpan>,
 {
-    let atom = select!(
-        Token::Unit(x) => Node::Unit(x.to_owned()),
-    );
-    atom
+    let expr = recursive(|expr| {
+        let atom = expr
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .or(select!(
+                Token::Num(x) => Node::Num(x),
+                Token::Unit(x) => Node::Unit(x.to_owned()),
+            ));
+
+        let unary = just(Token::Sub)
+            .repeated()
+            .foldr(atom, |_op, rhs| Node::UnrySub(Box::new(rhs)));
+
+        let def = just(Token::Def)
+            .ignore_then(select!(Token::Unit(x) => Node::Def(x.to_owned())))
+            .map_err(|err: ParseError| replace_expected!(err::<I>, [Token::Unit("...")]));
+
+        let product = unary.clone().foldl(
+            choice((
+                just(Token::Mul).to(Node::Mul as fn(_, _) -> _),
+                just(Token::Div).to(Node::Div as fn(_, _) -> _),
+            ))
+            .then(unary)
+            .repeated(),
+            |lhs, (op, rhs)| op(Box::new(lhs), Box::new(rhs)),
+        );
+
+        let sum = product.clone().foldl(
+            choice((
+                just(Token::Add).to(Node::Add as fn(_, _) -> _),
+                just(Token::Sub).to(Node::Sub as fn(_, _) -> _),
+            ))
+            .then(product)
+            .repeated(),
+            |lhs, (op, rhs)| op(Box::new(lhs), Box::new(rhs)),
+        );
+
+        sum.or(def)
+    });
+
+    //let def = just(Token::Def)
+    //    .ignore_then( select!( Token::Unit(name) => Node::Def(name.to_owned())));
+
+    expr
 }
 
 const SRC: &str = r"
-    meter
+    $
 ";
 
 fn main() {
+    let token_iter = Token::lexer(SRC).spanned().map(|(tok, span)| match tok {
+        Ok(tok) => (tok, span.into()),
+        Err(()) => (Token::Error(&SRC[span.clone()]), span.into()),
+    });
 
-    let token_iter = Token::lexer(SRC)
-        .spanned()
-        .map(|(tok, span)| match tok {
-            Ok(tok) => (tok, span.into()),
-            Err(()) => (Token::Error, span.into()),
-        });
+    let token_stream = Stream::from_iter(token_iter).spanned((SRC.len()..SRC.len()).into());
 
-    let token_stream = Stream::from_iter(token_iter)
-        .spanned((SRC.len()..SRC.len()).into());
+    let res = parser().parse(token_stream).into_result();
 
-    println!("{:?}", parser().parse(token_stream).into_result())
+    match res {
+        Ok(res) => println!("{}", res.to_string()),
+        Err(e) => println!("{:?}", e),
+    }
 }
