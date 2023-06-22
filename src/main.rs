@@ -1,67 +1,15 @@
 #![allow(dead_code)]
 
-use logos::Logos;
 use std::fmt::Display;
-use std::iter::Iterator;
-use std::ops::Range;
-
-use paste::paste;
-
-#[macro_export]
-macro_rules! enum_or {
-
-    ($x:pat) => {
-        paste!(Self::$x)
-    };
-
-    ($x1:pat, $($x2:pat),*) => {
-        paste!(Self::$x1) | enum_or!($($x2),*)
-    };
-}
-
-#[macro_export]
-macro_rules! enum_match {
-
-    ($self:ident, $default:expr, $n:expr,) => {$default};
-
-    ($self:ident, $default:expr, $n:expr, [$($x1:pat),*] $([$($x2:pat),*])*) => {
-
-        if let enum_or!($($x1),*) = $self {
-            $n
-        } else {
-            enum_match!($self, $default, $n+1, $([$($x2),*])*)
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! priority_func {
-
-    ($name:tt -> $typ:ty, $default:expr, $([$($x:pat),*])*) =>
-    {
-        pub fn $name(&self) -> $typ {
-            enum_match!(self, $default, $default + 1, $([$($x),*])*)
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! assign_func {
-
-    ($name: tt -> $typ:ty, $default: expr, $([$val:expr; $($x2:pat),*])*) => {
-        pub fn $name(&self) -> $typ {
-            #[allow(unreachable_patterns)]
-            match self {
-                $($(paste!(Self::$x2))|* => $val,)*
-                    _ => $default,
-            }
-        }
-    };
-}
+use chumsky::{
+    input::{Stream, ValueInput},
+    prelude::*,
+};
+use logos::Logos;
 
 #[derive(Logos, Debug, PartialEq, Clone)]
 #[logos(skip r"[ \t\n\f]+")]
-pub enum Token {
+pub enum Token<'a> {
     #[token("*")]
     Mul,
     #[token("/")]
@@ -93,18 +41,17 @@ pub enum Token {
     #[regex("def")]
     Def,
 
-    #[regex("[a-zA-Z]+", |lex| lex.slice().to_owned())]
-    Unit(String),
+    #[regex("[a-zA-Z]+", |lex| lex.slice())]
+    Unit(&'a str),
 
     #[regex("[0-9]+", |lex| lex.slice().parse().ok())]
     #[regex(r"(([0-9]+)(\.[0-9]+))", |lex| lex.slice().parse().ok())]
     Num(f64),
 
-    LexErr(String),
-    EOF,
+    Error,
 }
 
-impl Display for Token {
+impl Display for Token<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let res = match self {
             Token::Mul => "*".to_string(),
@@ -123,43 +70,15 @@ impl Display for Token {
             Token::Def => "def".to_string(),
             Token::Unit(name) => name.to_string(),
             Token::Num(v) => v.to_string(),
-            Token::LexErr(err) => err.to_string(),
-            Token::EOF => "EOF".to_string(),
+            Token::Error => "ERROR".to_string(),
         };
 
         write!(f, "{}", res)
     }
 }
 
-impl Token {
-    priority_func!(precedence -> i32, 0,
-        [Assign, AddEq, SubEq, MulEq, DivEq]
-        [Add, Sub]
-        [Mul, Div]
-    );
-
-    fn is_op(&self) -> bool {
-        self.precedence() != 0
-    }
-}
-
-pub trait TokenIter: Iterator<Item = (Token, Range<usize>)> {
-    fn peek(&mut self) -> Option<&Self::Item>;
-}
-
-impl<I: Iterator<Item = (Token, Range<usize>)>> TokenIter for std::iter::Peekable<I> {
-    fn peek(&mut self) -> Option<&Self::Item> {
-        std::iter::Peekable::peek(self)
-    }
-}
-
-#[derive(Debug, Default)]
-struct Error {
-    msg: String,
-}
-
 #[derive(Debug, PartialEq)]
-enum NodeType {
+enum Node {
     Def(String),
 
     Add(Box<Node>, Box<Node>),
@@ -172,21 +91,12 @@ enum NodeType {
     UnrySub(Box<Node>),
 }
 
-#[derive(Debug, PartialEq)]
-struct Node {
-    typ: NodeType,
-    range: Range<usize>,
-}
-
 impl Node {
-    fn new(typ: NodeType, range: Range<usize>) -> Self {
-        Node { typ, range }
-    }
 
     fn to_string(&self) -> String {
-        use NodeType::*;
+        use Node::*;
 
-        match &self.typ {
+        match &self {
             Def(name) => format!("def {}", name),
             Add(l, r) => format!("{} + {}", l.to_string(), r.to_string()),
             Sub(l, r) => format!("{} - {}", l.to_string(), r.to_string()),
@@ -199,147 +109,32 @@ impl Node {
     }
 }
 
-//impl fmt::Display for Node {
-//    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-//        write!(f, "{}", self.to_string())
-//    }
-//}
 
-fn parse_def<I: TokenIter>(iter: &mut I) -> Result<NodeType, String> {
-    let tok = iter.next();
-
-    if let Some((Token::Unit(name), _)) = tok {
-        return Ok(NodeType::Def(name));
-    } else if let Some((tok, _)) = tok {
-        return Err(format!("def expectes unit name, found: {}", tok));
-    } else {
-        assert!(false, "expected EOF");
-    }
-
-    todo!();
+fn parser<'a, I>() -> impl Parser<'a, I, Node, extra::Err<Rich<'a, Token<'a>>>>
+where
+    I: ValueInput<'a, Token = Token<'a>, Span = SimpleSpan>,
+{
+    let atom = select!(
+        Token::Unit(x) => Node::Unit(x.to_owned()),
+    );
+    atom
 }
 
-fn atom<I: TokenIter>(iter: &mut I) -> Result<Node, String> {
-    assert!(iter.peek().is_some());
-
-    let (tok, range) = iter.next().unwrap();
-
-    let typ = match tok {
-        Token::Unit(name) => NodeType::Unit(name),
-        Token::Num(f64) => NodeType::Num(f64),
-        Token::LexErr(msg) => return Err(msg),
-        Token::Def => parse_def(iter)?,
-
-        Token::Sub => NodeType::UnrySub(Box::new(parse_expr(iter)?)),
-
-        _ => panic!("atom should not be called with {:?}", tok),
-    };
-
-    Ok(Node::new(typ, range))
-}
-
-macro_rules! check_for_eof {
-    ($e: expr) => {
-        match $e {
-            None => return Err("no EOF at the end of token stream!".to_string()),
-            Some((Token::EOF, _)) => true,
-            _ => false,
-        }
-    };
-}
-
-fn apply_op(op: Token, lhs: Node, rhs: Node) -> Node {
-    let range = lhs.range.start..rhs.range.end;
-
-    use Token::*;
-
-    Node::new(
-        match op {
-            Add => NodeType::Add(lhs.into(), rhs.into()),
-            Sub => NodeType::Sub(lhs.into(), rhs.into()),
-            Mul => NodeType::Mul(lhs.into(), rhs.into()),
-            Div => NodeType::Div(lhs.into(), rhs.into()),
-            _ => panic!("apply_op called with: {:?}", op),
-        },
-        range,
-    )
-}
-
-fn parse_sub_expr<I: TokenIter>(
-    iter: &mut I,
-    mut lhs: Node,
-    precedence: i32,
-) -> Result<Node, String> {
-    if check_for_eof!(iter.peek()) {
-        return Ok(lhs);
-    }
-
-    let mut lookahead = iter.peek().unwrap().0.clone();
-
-    while lookahead.is_op() && lookahead.precedence() > precedence {
-        let op = lookahead;
-
-        iter.next();
-        if check_for_eof!(iter.peek()) {
-            return Ok(lhs);
-        }
-
-        let mut rhs = atom(iter)?;
-
-        if check_for_eof!(iter.peek()) {
-            lhs = apply_op(op, lhs, rhs);
-            break;
-        }
-
-        lookahead = iter.peek().unwrap().0.clone();
-
-        while lookahead.is_op() && lookahead.precedence() > op.precedence() {
-            rhs = parse_sub_expr(iter, rhs, op.precedence())?;
-
-            if check_for_eof!(iter.peek()) {
-                break;
-            }
-            lookahead = iter.peek().unwrap().0.clone();
-        }
-
-        lhs = apply_op(op, lhs, rhs);
-    }
-
-    Ok(lhs)
-}
-
-fn parse_expr<I: TokenIter>(iter: &mut I) -> Result<Node, String> {
-    if iter.peek().is_none() {
-        return Err("no EOF at the end of token stream!".to_string());
-    }
-
-    let lhs = atom(iter)?;
-    parse_sub_expr(iter, lhs, -1)
-}
-
-fn lex_code(code: &str) -> impl TokenIter + '_ {
-    let lex = Token::lexer(code);
-
-    lex.spanned()
-        .map(|(tok, rang)| {
-            (
-                match tok {
-                    Ok(v) => v,
-                    Err(_) => Token::LexErr(code[rang.clone()].to_owned()),
-                },
-                rang,
-            )
-        })
-        .chain(std::iter::once((Token::EOF, 0..0)))
-        .peekable()
-}
+const SRC: &str = r"
+    meter
+";
 
 fn main() {
-    let code: &str = "def @";
 
-    let mut iter = lex_code(code);
+    let token_iter = Token::lexer(SRC)
+        .spanned()
+        .map(|(tok, span)| match tok {
+            Ok(tok) => (tok, span.into()),
+            Err(()) => (Token::Error, span.into()),
+        });
 
-    println!("{:?}", parse_expr(&mut iter));
-    //println!("{:?}", parse_expr(&mut iter));
-    //print!("{:?}", parse(&mut lex));
+    let token_stream = Stream::from_iter(token_iter)
+        .spanned((SRC.len()..SRC.len()).into());
+
+    println!("{:?}", parser().parse(token_stream).into_result())
 }
