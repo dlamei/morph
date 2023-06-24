@@ -5,6 +5,8 @@ use chumsky::{input::ValueInput, prelude::*};
 
 #[derive(Logos, Debug, PartialEq, Clone)]
 #[logos(skip r"[ \t\f]+")]
+#[logos(subpattern unicode_ident = r"\p{XID_Start}\p{XID_Continue}*")]
+#[logos(subpattern ascii_ident = r"[_a-zA-Z][_0-9a-zA-Z]*")]
 pub enum Token<'a> {
     #[token("*")]
     Mul,
@@ -37,7 +39,7 @@ pub enum Token<'a> {
     #[regex("def")]
     Def,
 
-    #[regex(r"\p{XID_Start}\p{XID_Continue}*", |lex| lex.slice())]
+    #[regex("(?&unicode_ident)", |lex| lex.slice())]
     Unit(&'a str),
 
     #[regex("[0-9]+", |lex| lex.slice().parse().ok())]
@@ -48,7 +50,7 @@ pub enum Token<'a> {
     #[token(";")]
     NextExpr,
 
-    Error(&'a str),
+    LexErr(&'a str),
 }
 
 impl Display for Token<'_> {
@@ -70,8 +72,8 @@ impl Display for Token<'_> {
             Token::Def => "def",
             Token::Unit(_) => "UNIT",
             Token::Num(_) => "NUM",
-            Token::NextExpr => "\n",
-            Token::Error(msg) => return write!(f, "ERROR({msg})"),
+            Token::NextExpr => "NextExpr",
+            Token::LexErr(msg) => return write!(f, "Lexer Error: {msg}"),
         };
 
         write!(f, "{}", res)
@@ -138,10 +140,12 @@ macro_rules! merge_expected {
     }};
 }
 
+pub type ParseError<'a> = Rich<'a, Token<'a>>;
+
 impl<'a> Parsable<'a> for Node<'a> {
     type Token = Token<'a>;
 
-    fn parser<I>() -> Boxed<'a, 'a, I, Self, extra::Err<Rich<'a, Self::Token>>>
+    fn parser<I>() -> Boxed<'a, 'a, I, Self, extra::Err<ParseError<'a>>>
     where
         I: ValueInput<'a, Token = Self::Token, Span = SimpleSpan>,
     {
@@ -152,17 +156,13 @@ impl<'a> Parsable<'a> for Node<'a> {
                     Token::Num(x) => Node::Num(x),
                     Token::Unit(x) => Node::Unit(x),
                 ))
-                .map_err(|err: Rich<Token<'_>>| {
+                .map_err(|err: ParseError| {
                     merge_expected!(err::<I>, [Token::Num(0.), Token::Unit("...")])
                 });
 
             let unary = just(Token::Sub)
                 .repeated()
                 .foldr(atom, |_op, rhs| Node::UnrySub(Box::new(rhs)));
-
-            let def = just(Token::Def)
-                .ignore_then(select!(Token::Unit(x) => Node::Def(x)))
-                .map_err(|err: Rich<Token<'_>>| merge_expected!(err::<I>, [Token::Unit("...")]));
 
             let product = unary.clone().foldl(
                 choice((
@@ -184,17 +184,21 @@ impl<'a> Parsable<'a> for Node<'a> {
                 |lhs, (op, rhs)| op(Box::new(lhs), Box::new(rhs)),
             );
 
-            def.or(sum)
+            sum
         });
 
-        let body = just(Token::NextExpr)
-            .repeated()
-            .ignore_then(expr)
-            .separated_by(just(Token::NextExpr))
+        let def = just(Token::Def)
+            .ignore_then(select!(Token::Unit(x) => Node::Def(x)))
+            .map_err(|err: ParseError| merge_expected!(err::<I>, [Token::Unit("...")]));
+
+        let expr = expr.or(def);
+
+        let body = expr
+            .separated_by(just(Token::NextExpr).repeated())
+            .allow_trailing()
             .allow_leading()
             .collect::<Vec<_>>()
-            .map(Node::Body)
-            .then_ignore(just(Token::NextExpr).repeated().then(end()));
+            .map(Node::Body);
 
         body.boxed()
     }
