@@ -3,7 +3,7 @@ use logos::Logos;
 
 use chumsky::{input::Stream, prelude::Input, Parser};
 
-pub fn parse<'a>(src: &'a str) -> Result<Node<'a>, Vec<ParseError>> {
+pub fn parse(src: &str) -> Result<Node<'_>, Vec<ParseError>> {
     let token_iter = Token::lexer(src).spanned().map(|(tok, span)| match tok {
         Ok(tok) => (tok, span.into()),
         Err(()) => (Token::LexErr(&src[span.clone()]), span.into()),

@@ -4,9 +4,13 @@ mod types;
 use ariadne::{Color, Label, Report, ReportKind, Source};
 
 const SRC: &str = r"
-def $
-m - meter
-d
+def meter
+
+- meter * s
+
+
+second
+joules 
 ";
 
 fn main() {
@@ -33,9 +37,13 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use crate::morph;
+
     #[test]
-    fn it_works() {
-        let result = 2 + 2;
-        assert_eq!(result, 4);
+    fn basic_expr() {
+        assert!(morph::parse("def meter").is_ok());
+        assert!(morph::parse("def $eter").is_err());
+        assert!(morph::parse("meter * s").is_ok());
+        assert!(morph::parse("def meter \n meter * s").is_ok());
     }
 }

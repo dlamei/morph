@@ -48,7 +48,7 @@ pub enum Token<'a> {
 
     #[regex(r"\n")]
     #[token(";")]
-    NextExpr,
+    NL,
 
     LexErr(&'a str),
 }
@@ -72,7 +72,7 @@ impl Display for Token<'_> {
             Token::Def => "def",
             Token::Unit(_) => "UNIT",
             Token::Num(_) => "NUM",
-            Token::NextExpr => "NextExpr",
+            Token::NL => "NextExpr",
             Token::LexErr(msg) => return write!(f, "Lexer Error: {msg}"),
         };
 
@@ -94,6 +94,8 @@ pub enum Node<'a> {
     UnrySub(Box<Node<'a>>),
 
     Body(Vec<Node<'a>>),
+
+    Err,
 }
 
 impl Node<'_> {
@@ -114,6 +116,7 @@ impl Node<'_> {
                 .map(|x| "\n".to_owned() + &x.to_code())
                 .reduce(|e1, e2| e1 + &e2)
                 .unwrap_or_default(),
+            Err => "ERROR".to_owned(),
         }
     }
 }
@@ -174,7 +177,7 @@ impl<'a> Parsable<'a> for Node<'a> {
                 |lhs, (op, rhs)| op(Box::new(lhs), Box::new(rhs)),
             );
 
-            let sum = product.clone().foldl(
+            product.clone().foldl(
                 choice((
                     just(Token::Add).to(Node::Add as fn(_, _) -> _),
                     just(Token::Sub).to(Node::Sub as fn(_, _) -> _),
@@ -182,9 +185,7 @@ impl<'a> Parsable<'a> for Node<'a> {
                 .then(product)
                 .repeated(),
                 |lhs, (op, rhs)| op(Box::new(lhs), Box::new(rhs)),
-            );
-
-            sum
+            )
         });
 
         let def = just(Token::Def)
@@ -193,12 +194,26 @@ impl<'a> Parsable<'a> for Node<'a> {
 
         let expr = expr.or(def);
 
-        let body = expr
-            .separated_by(just(Token::NextExpr).repeated())
-            .allow_trailing()
-            .allow_leading()
-            .collect::<Vec<_>>()
-            .map(Node::Body);
+        let body = just(Token::NL).repeated().ignore_then(
+            expr.then_ignore(just(Token::NL).repeated().at_least(1).or(end()))
+            // .recover_with(via_parser(
+            //         end().map(|_| {
+            //             println!("end!");
+            //             Node::Err
+            //         })
+            //     ))
+            // .recover_with(via_parser(
+            //         none_of(Token::NL).repeated().map(|x| {
+            //             println!("mapped: {:?}", x);
+            //             Node::Err
+            //         })
+            //     ))
+        )
+        .map(|x| {println!("parsed: {:?}", x); x})
+        .repeated()
+        .collect::<Vec<_>>().map(Node::Body)
+        ;
+
 
         body.boxed()
     }
