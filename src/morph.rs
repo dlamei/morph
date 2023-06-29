@@ -1,4 +1,3 @@
-use crate::parser::*;
 use crate::types::*;
 
 use ariadne::Source;
@@ -6,8 +5,6 @@ use ariadne::{Color, Label, Report, ReportKind};
 use logos::Logos;
 
 use chumsky::{input::Stream, prelude::Input, Parser};
-
-pub type ParseResult<'a> = chumsky::ParseResult<Node<'a>, ParseError<'a>>;
 
 pub fn parse(src: &str) -> ParseResult {
     let token_iter = Token::lexer(src).spanned().map(|(tok, span)| match tok {
@@ -26,6 +23,7 @@ pub fn run(file_name: &str, src: &str) {
     for err in res.errors() {
         Report::build(ReportKind::Error, file_name, err.span().start)
             // .with_message(err.to_string()) //TODO:: General error code + short overview of error
+            .with_message(err.typ.to_string()) //TODO:: General error code + short overview of error
             .with_label(
                 Label::new((file_name, err.span().into_range()))
                     .with_message(err.reason().to_string())

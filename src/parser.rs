@@ -26,8 +26,6 @@ macro_rules! cast_enum {
     }};
 }
 
-pub type ParseError<'a> = Rich<'a, Token<'a>>;
-
 impl<'a> Node<'a> {
     pub fn parser<I>() -> Boxed<'a, 'a, I, Self, extra::Err<ParseError<'a>>>
     where
@@ -81,7 +79,10 @@ impl<'a> Node<'a> {
             .map(|u| cast_enum!(u => (Node::Unit(name)) {return Node::Def(name)}))
             .map_err(|err: ParseError| merge_expected!(err::<I>, [Token::UNIT]));
 
-        let expr = choice((expr, def));
+        let expr = choice((expr, def)).map_err(|mut err: ParseError| {
+            err.typ = ParseErrorType::UndefinedSyntax;
+            err
+        });
 
         let nl = choice((just(Token::NL("\n")), just(Token::NL(";"))));
 
