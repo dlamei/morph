@@ -49,12 +49,7 @@ impl<'a> Node<'a> {
                 unit,
                 num,
             ))
-            .map_err(|err: ParseError| {
-                merge_expected!(
-                    err::<I>,
-                    [Token::Num(Default::default()), Token::Unit("...")]
-                )
-            });
+            .map_err(|err: ParseError| merge_expected!(err::<I>, [Token::NUM, Token::UNIT]));
 
             let unary = just(Token::Sub)
                 .repeated()
@@ -84,27 +79,25 @@ impl<'a> Node<'a> {
         let def = just(Token::Def)
             .ignore_then(unit)
             .map(|u| cast_enum!(u => (Node::Unit(name)) {return Node::Def(name)}))
-            .map_err(|err: ParseError| merge_expected!(err::<I>, [Token::Unit("...")]));
+            .map_err(|err: ParseError| merge_expected!(err::<I>, [Token::UNIT]));
 
         let expr = choice((expr, def));
 
-        let body = just(Token::NL)
+        let nl = choice((just(Token::NL("\n")), just(Token::NL(";"))));
+
+        let body = nl
+            .clone()
             .repeated()
             .ignore_then(
-                expr.then_ignore(just(Token::NL).repeated().at_least(1).or(end())), // .recover_with(via_parser(
-                                                                                    //         end().map(|_| {
-                                                                                    //             println!("end!");
-                                                                                    //             Node::Err
-                                                                                    //         })
-                                                                                    //     ))
-                                                                                    // .recover_with(via_parser(
-                                                                                    //         none_of(Token::NL).repeated().map(|x| {
-                                                                                    //             println!("mapped: {:?}", x);
-                                                                                    //             Node::Err
-                                                                                    //         })
-                                                                                    //     ))
+                expr.then_ignore(nl.repeated().at_least(1).or(end()))
+                    .recover_with(via_parser(
+                        none_of(Token::NL("\n"))
+                            .and_is(none_of(Token::NL(";")))
+                            .repeated()
+                            .at_least(1)
+                            .map(|_| Node::Err),
+                    )),
             )
-            // .map(|x| {println!("parsed: {:?}", x); x})
             .repeated()
             .collect::<Vec<_>>()
             .map(Node::Body);
@@ -113,10 +106,9 @@ impl<'a> Node<'a> {
     }
 }
 
-
 #[cfg(test)]
 mod test {
-    use crate::test_utils::*;
+    use crate::{morph::test_utils::*, types::Token};
 
     #[test]
     fn basic_expr() {
@@ -126,14 +118,21 @@ mod test {
             nodes("a + b * c + d"),
             bod!(u("a") + u("b") * u("c") + u("d"))
         );
-        eq!(nodes("a * (b + c) * d"), bod!(u("a") * (u("b") + u("c")) * u("d")));
+        eq!(
+            nodes("a * (b + c) * d"),
+            bod!(u("a") * (u("b") + u("c")) * u("d"))
+        );
     }
 
     #[test]
     fn def() {
         eq!(nodes("def m"), bod!(d("m")));
-        assert!(parse("def \n").is_err());
-        assert!(parse("def 2").is_err());
+        assert!(parse("def \n").has_errors());
+        assert!(parse("def 2").has_errors());
+        assert!(cmp_expected(
+            get_reason!(parse("def ; meter")),
+            &[Token::UNIT]
+        ));
     }
 
     #[test]
@@ -165,12 +164,17 @@ mod test {
             nodes("- meter * -s"),
             bod!((n(-1) * u("meter")) * (n(-1) * u("s")))
         );
-        a!(parse("+ meter").is_err());
+        assert!(parse("+ meter").has_errors());
     }
 
     #[test]
     fn syntax_err() {
-        a!(parse("def me$ter").is_err());
-        a!(parse("me<er").is_err());
+        assert!(parse("def me$ter").has_errors());
+        assert!(parse("me<er").has_errors());
+    }
+
+    #[test]
+    fn error_recover() {
+        eq!(parse("def ; meter; +second; dir; --m").errors().count(), 2)
     }
 }

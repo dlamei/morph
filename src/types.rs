@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::fmt;
 
 use logos::Logos;
 use paste::paste;
@@ -14,12 +14,8 @@ pub enum Token<'a> {
     Div,
     #[token("+")]
     Add,
-    #[token("++")]
-    AddAdd,
     #[token("-")]
     Sub,
-    #[token("--")]
-    SubSub,
     #[token("=")]
     Assign,
     #[token("+=")]
@@ -46,22 +42,25 @@ pub enum Token<'a> {
     #[regex(r"(([0-9]+)(\.[0-9]+))", |lex| lex.slice().parse().ok())]
     Num(NumType),
 
-    #[regex(r"\n")]
-    #[token(";")]
-    NL,
+    #[regex(r"\n", |lex| lex.slice())]
+    #[token(";", |lex| lex.slice())]
+    NL(&'a str),
 
     LexErr(&'a str),
 }
 
-impl Display for Token<'_> {
+impl<'a> Token<'a> {
+    pub const NUM: Self = Self::Num(0);
+    pub const UNIT: Self = Self::Unit("...");
+}
+
+impl fmt::Display for Token<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let res = match self {
             Token::Mul => "*",
             Token::Div => "/",
             Token::Add => "+",
-            Token::AddAdd => "++",
             Token::Sub => "-",
-            Token::SubSub => "--",
             Token::Assign => "=",
             Token::AddEq => "+=",
             Token::SubEq => "-=",
@@ -72,7 +71,8 @@ impl Display for Token<'_> {
             Token::Def => "def",
             Token::Unit(_) => "UNIT",
             Token::Num(_) => "NUM",
-            Token::NL => "NextExpr",
+            Token::NL("\n") => "\\n",
+            Token::NL(c) => *c,
             Token::LexErr(msg) => return write!(f, "Lexer Error: {msg}"),
         };
 
@@ -93,31 +93,29 @@ pub enum Node<'a> {
     Unit(&'a str),
     Num(NumType),
 
-    // UnrySub(Box<Node<'a>>),
     Body(Vec<Node<'a>>),
 
     Err,
 }
 
-impl Node<'_> {
-    pub fn to_code(&self) -> String {
-        use Node::*;
-
-        match &self {
-            Def(name) => format!("def {}", name),
-            Add(l, r) => format!("{} + {}", l.to_code(), r.to_code()),
-            Sub(l, r) => format!("{} - {}", l.to_code(), r.to_code()),
-            Mul(l, r) => format!("{} * {}", l.to_code(), r.to_code()),
-            Div(l, r) => format!("{} / {}", l.to_code(), r.to_code()),
-            // UnrySub(v) => format!("- {}", v.to_code()),
-            Unit(name) => name.to_string(),
-            Num(num) => num.to_string(),
-            Body(bod) => bod
-                .iter()
-                .map(|x| "\n".to_owned() + &x.to_code())
-                .reduce(|e1, e2| e1 + &e2)
-                .unwrap_or_default(),
-            Err => "ERROR".to_owned(),
+impl<'a> fmt::Display for Node<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Node::Def(name) => write!(f, "(def {})", name),
+            Node::Add(left, right) => write!(f, "({} + {})", left, right),
+            Node::Sub(left, right) => write!(f, "({} - {})", left, right),
+            Node::Mul(left, right) => write!(f, "({} * {})", left, right),
+            Node::Div(left, right) => write!(f, "({} / {})", left, right),
+            Node::Unit(unit) => write!(f, "{}", unit),
+            Node::Num(num_type) => write!(f, "{}", num_type),
+            Node::Body(nodes) => {
+                writeln!(f, "Body(")?;
+                for node in nodes {
+                    writeln!(f, "{}", node)?;
+                }
+                writeln!(f, ")")
+            }
+            Node::Err => write!(f, "Err"),
         }
     }
 }
