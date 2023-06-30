@@ -24,6 +24,7 @@ pub fn run(file_name: &str, src: &str) {
         Report::build(ReportKind::Error, file_name, err.span().start)
             // .with_message(err.to_string()) //TODO:: General error code + short overview of error
             .with_message(err.typ.to_string()) //TODO:: General error code + short overview of error
+            .with_code(err.err_code())
             .with_label(
                 Label::new((file_name, err.span().into_range()))
                     .with_message(err.reason().to_string())

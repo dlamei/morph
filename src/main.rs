@@ -3,15 +3,15 @@ mod parser;
 mod types;
 
 const SRC: &str = r"
-def dir;
+$
 
-3 mster
+3 d
 
-- meter * s
++ meter * s
 
-3.4
+3
 
-second
+meter d $
 joules";
 
 fn main() {

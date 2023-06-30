@@ -195,17 +195,23 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ParseErrorType {
-    CouldNotLex,
-    UndefinedSyntax,
-    Other,
+    Other = 0,
+    CouldNotLex = 1,
+    UndefinedSyntax = 2,
 }
 
 impl ParseErrorType {
+
+    pub fn code(&self) -> u32 {
+       *self as usize as u32 
+    }
+
+
     fn desc(&self) -> &'static str {
         match self {
-            ParseErrorType::CouldNotLex => "CouldNotLex: found illegal character",
+            ParseErrorType::CouldNotLex => "CouldNotLex: unknown character found while lexing",
             ParseErrorType::UndefinedSyntax => "UndefinedSynax: parser encountered syntax error",
             ParseErrorType::Other => "",
         }
@@ -238,6 +244,24 @@ impl fmt::Display for ParseError<'_> {
 }
 
 impl<'a> ParseError<'a> {
+    pub fn custom<M: ToString>(span: SimpleSpan<usize>, msg: M, typ: ParseErrorType) -> Self {
+        Self {
+            span,
+            reason: Box::new(RichReason::Custom(msg.to_string())),
+            typ,
+        }
+    }
+
+    pub fn err_code(&self) -> u32 {
+        self.typ.code() 
+    }
+
+    pub fn set_type(&mut self, typ: ParseErrorType) {
+        if self.typ == ParseErrorType::Other {
+            self.typ = typ;
+        }
+    }
+
     pub fn span(&self) -> &SimpleSpan {
         &self.span
     }
