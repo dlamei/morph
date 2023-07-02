@@ -3,6 +3,7 @@ use std::ops;
 use crate::types::*;
 
 use chumsky::{input::ValueInput, prelude::*, primitive};
+use rust_decimal_macros::dec;
 
 macro_rules! merge_expected {
     ($err: ident ::<$I: ty>, $exp_tok: expr) => {{
@@ -48,16 +49,19 @@ impl<'a> Node<'a> {
             });
         });
 
-        let syntax_err = primitive::select::<'_, _, I, &str, extra::Err<ParseError<'a>>>(
-            |x, _| match x {
+        let syntax_err =
+            primitive::select::<'_, _, I, &str, extra::Err<ParseError<'a>>>(|x, _| match x {
                 Token::LexErr(err) => Some(err),
                 _ => None,
-            },
-        )
-        .validate(|x, span, emit| {
-            emit.emit(ParseError::custom(span, format!("unsupported character: {}", x), ParseErrorType::CouldNotLex))
-        })
-        .map(|_| Node::Err);
+            })
+            .validate(|x, span, emit| {
+                emit.emit(ParseError::custom(
+                    span,
+                    format!("unsupported character: {}", x),
+                    ParseErrorType::CouldNotLex,
+                ))
+            })
+            .map(|_| Node::Err);
 
         let expr = recursive(|expr| {
             let atom = choice((
@@ -70,7 +74,7 @@ impl<'a> Node<'a> {
 
             let unary = just(Token::Sub)
                 .repeated()
-                .foldr(atom, |_op, rhs| Node::Num(-1) * rhs);
+                .foldr(atom, |_op, rhs| Node::Num(dec!(-1)) * rhs);
 
             let product = unary.clone().foldl(
                 choice((
@@ -82,7 +86,7 @@ impl<'a> Node<'a> {
                 |lhs, (op, rhs)| op(lhs, rhs),
             );
 
-            product.clone().foldl(
+            let sum = product.clone().foldl(
                 choice((
                     just(Token::Add).to(ops::Add::add as fn(_, _) -> _),
                     just(Token::Sub).to(ops::Sub::sub as fn(_, _) -> _),
@@ -90,7 +94,29 @@ impl<'a> Node<'a> {
                 .then(product)
                 .repeated(),
                 |lhs, (op, rhs)| op(lhs, rhs),
-            )
+            );
+
+            let assign = unit.clone().foldl(
+                choice((
+                    just(Token::Assign).to(Node::Assign as fn(&'a str, Box<Node<'a>>) -> Node<'a>),
+                    just(Token::AddAssign)
+                        .to(Node::AddAssign as fn(&'a str, Box<Node<'a>>) -> Node<'a>),
+                    just(Token::SubAssign)
+                        .to(Node::SubAssign as fn(&'a str, Box<Node<'a>>) -> Node<'a>),
+                    just(Token::MulAssign)
+                        .to(Node::MulAssign as fn(&'a str, Box<Node<'a>>) -> Node<'a>),
+                    just(Token::DivAssign)
+                        .to(Node::DivAssign as fn(&'a str, Box<Node<'a>>) -> Node<'a>),
+                ))
+                .then(sum.clone())
+                .repeated()
+                .at_least(1),
+                |lhs: Node, (op, rhs): (_, Node)| {
+                    op(cast_enum!(lhs => (Node::Unit(name)) {name}), Box::new(rhs))
+                },
+            );
+
+            assign.or(sum)
         });
 
         let def = just(Token::Def)
@@ -100,29 +126,27 @@ impl<'a> Node<'a> {
 
         let expr = choice((expr, def, syntax_err));
 
-        let nl = choice((just(Token::NL("\n")), just(Token::NL(";"))));
-
-        let body = nl
-            .clone()
+        let body = just(Token::NL)
             .repeated()
             .ignore_then(
-                expr.then_ignore(nl.repeated().at_least(1).or(end()))
+                expr.then_ignore(just(Token::NL).clone().repeated().at_least(1).or(end()))
                     .map_err(|mut err: ParseError| {
                         set_err_type!(err, ParseErrorType::UndefinedSyntax)
                     })
                     .recover_with(via_parser(
-                        none_of(Token::NL("\n"))
-                            .and_is(none_of(Token::NL(";")))
-                            .repeated()
-                            .at_least(1)
-                            .map(|_| Node::Err),
+                        none_of(Token::NL).repeated().at_least(1).map(|_| Node::Err),
                     )),
             )
             .repeated()
             .collect::<Vec<_>>()
             .map(Node::Body);
 
-        body.boxed()
+        let empty = just(Token::NL)
+            .repeated()
+            .then(end())
+            .map(|(_, _)| Node::Body(vec![]));
+
+        empty.or(body).boxed()
     }
 }
 
@@ -133,6 +157,7 @@ mod test {
     #[test]
     fn basic_expr() {
         eq!(nodes(""), bod!());
+        eq!(nodes(";;\n;\n\n"), bod!());
         eq!(nodes("def m \n m * s"), bod!(d("m"), u("m") * u("s")));
         eq!(
             nodes("a + b * c + d"),
@@ -147,32 +172,32 @@ mod test {
     #[test]
     fn def() {
         eq!(nodes("def m"), bod!(d("m")));
-        assert!(parse("def \n").has_errors());
-        assert!(parse("def 2").has_errors());
+        assert!(!parse("def \n").1.is_empty());
+        assert!(!parse("def 2").1.is_empty());
         assert!(cmp_expected(
-            get_reason!(parse("def ; meter")),
+            parse("def ; meter").1.swap_remove(0).into_reason(),
             &[Token::UNIT]
         ));
     }
 
     #[test]
-    fn add() {
+    fn binop() {
+        eq!(nodes("m / s"), bod!(u("m") / u("s")));
+        eq!(nodes("m * s"), bod!(u("m") * u("s")));
+        eq!(nodes("m - s"), bod!(u("m") - u("s")));
         eq!(nodes("m + s"), bod!(u("m") + u("s")));
     }
 
     #[test]
-    fn sub() {
-        eq!(nodes("m - s"), bod!(u("m") - u("s")));
-    }
+    fn assign() {
+        let mut a = u("a");
+        a.assign(n(2) / n(3) + n(2));
+        eq!(nodes("a = 2 / 3 + 2"), bod!(a));
 
-    #[test]
-    fn mul() {
-        eq!(nodes("m * s"), bod!(u("m") * u("s")));
-    }
+        let mut b = u("b");
+        b += u("m") + n(3) * n(2);
+        eq!(nodes("b += m + 3 * 2"), bod!(b));
 
-    #[test]
-    fn div() {
-        eq!(nodes("m / s"), bod!(u("m") / u("s")));
     }
 
     #[test]
@@ -184,29 +209,23 @@ mod test {
             nodes("- meter * -s"),
             bod!((n(-1) * u("meter")) * (n(-1) * u("s")))
         );
-        assert!(parse("+ meter").has_errors());
+        assert!(!parse("+ meter").1.is_empty());
     }
 
     #[test]
     fn syntax_err() {
-        assert!(parse("def me$ter").has_errors());
-        assert!(parse("me<er").has_errors());
+        assert!(!parse("def me$ter").1.is_empty());
+        assert!(!parse("me<er").1.is_empty());
     }
 
     #[test]
     fn error_recover() {
-        eq!(parse("def ; meter; +second; dir; --m").errors().count(), 2)
+        eq!(parse("def ; meter; +second; dir; --m").1.len(), 2)
     }
 
     #[test]
     fn error_type() {
-        eq!(
-            parse("$").errors().next().unwrap().typ,
-            ParseErrorType::CouldNotLex
-        );
-        eq!(
-            parse("+ meter").errors().next().unwrap().typ,
-            ParseErrorType::UndefinedSyntax
-        );
+        eq!(parse("$").1[0].typ, ParseErrorType::CouldNotLex);
+        eq!(parse("+ meter").1[0].typ, ParseErrorType::UndefinedSyntax);
     }
 }

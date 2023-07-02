@@ -10,6 +10,16 @@ use chumsky::{
 use logos::Logos;
 use paste::paste;
 
+use rust_decimal::prelude::*;
+use rust_decimal_macros::dec;
+use std::str::FromStr;
+
+pub type NumType = Decimal;
+
+fn decimal<'a>(lex: &mut logos::Lexer<'a, Token<'a>>) -> Option<Decimal> {
+    Decimal::from_str(lex.slice()).ok()
+}
+
 #[derive(Logos, Debug, PartialEq, Clone)]
 #[logos(skip r"[ \t\f]+")]
 #[logos(subpattern unicode_ident = r"\p{XID_Start}\p{XID_Continue}*")]
@@ -26,13 +36,13 @@ pub enum Token<'a> {
     #[token("=")]
     Assign,
     #[token("+=")]
-    AddEq,
+    AddAssign,
     #[token("-=")]
-    SubEq,
+    SubAssign,
     #[token("*=")]
-    MulEq,
+    MulAssign,
     #[token("/=")]
-    DivEq,
+    DivAssign,
 
     #[token("(")]
     LParen,
@@ -45,51 +55,50 @@ pub enum Token<'a> {
     #[regex("(?&unicode_ident)", |lex| lex.slice())]
     Unit(&'a str),
 
-    #[regex("[0-9]+", |lex| lex.slice().parse().ok())]
-    #[regex(r"(([0-9]+)(\.[0-9]+))", |lex| lex.slice().parse().ok())]
+    // #[regex("[0-9]+", |lex| lex.slice().parse().ok())]
+    #[regex(r"(([0-9]+)(\.[0-9]+))", decimal)]
+    #[regex("[0-9]+", decimal)]
     Num(NumType),
 
-    #[regex(r"\n", |lex| lex.slice())]
-    #[token(";", |lex| lex.slice())]
-    NL(&'a str),
+    #[regex(r";|\n")]
+    NL,
 
     LexErr(&'a str),
 }
 
 impl<'a> Token<'a> {
-    pub const NUM: Self = Self::Num(0);
+    pub const NUM: Self = Self::Num(dec!(0));
     pub const UNIT: Self = Self::Unit("...");
 }
 
 impl fmt::Display for Token<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use Token::*;
+
         let res = match self {
-            Token::Mul => "*",
-            Token::Div => "/",
-            Token::Add => "+",
-            Token::Sub => "-",
-            Token::Assign => "=",
-            Token::AddEq => "+=",
-            Token::SubEq => "-=",
-            Token::MulEq => "*=",
-            Token::DivEq => "/=",
-            Token::LParen => "(",
-            Token::RParen => ")",
-            Token::Def => "def",
-            Token::Unit(_) => "UNIT",
-            Token::Num(_) => "NUM",
-            Token::NL("\n") => "\\n",
-            Token::NL(c) => *c,
-            Token::LexErr(msg) => return write!(f, "Lexer Error: {msg}"),
+            Mul => "*",
+            Div => "/",
+            Add => "+",
+            Sub => "-",
+            Assign => "=",
+            AddAssign => "+=",
+            SubAssign => "-=",
+            MulAssign => "*=",
+            DivAssign => "/=",
+            LParen => "(",
+            RParen => ")",
+            Def => "def",
+            Unit(_) => "UNIT",
+            Num(_) => "NUM",
+            NL => r"(\n or ;)",
+            LexErr(msg) => return write!(f, "Lexer Error: {msg}"),
         };
 
         write!(f, "{}", res)
     }
 }
 
-pub type NumType = i64;
-
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Node<'a> {
     Def(&'a str),
 
@@ -100,51 +109,94 @@ pub enum Node<'a> {
     Unit(&'a str),
     Num(NumType),
 
+    Assign(&'a str, Box<Node<'a>>),
+    AddAssign(&'a str, Box<Node<'a>>),
+    SubAssign(&'a str, Box<Node<'a>>),
+    MulAssign(&'a str, Box<Node<'a>>),
+    DivAssign(&'a str, Box<Node<'a>>),
+
     Body(Vec<Node<'a>>),
 
     Err,
 }
 
+impl<'a> Node<'a> {
+    pub fn assign(&mut self, other: Node<'a>) {
+        if let Node::Unit(name) = *self {
+            *self = Node::Assign(name, other.into());
+        } else {
+            panic!("You can only Assign to the Node::Unit enum");
+        }
+    }
+}
+
 impl<'a> fmt::Display for Node<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use Node::*;
+
         match self {
-            Node::Def(name) => write!(f, "(def {})", name),
-            Node::Add(left, right) => write!(f, "({} + {})", left, right),
-            Node::Sub(left, right) => write!(f, "({} - {})", left, right),
-            Node::Mul(left, right) => write!(f, "({} * {})", left, right),
-            Node::Div(left, right) => write!(f, "({} / {})", left, right),
-            Node::Unit(unit) => write!(f, "{}", unit),
-            Node::Num(num_type) => write!(f, "{}", num_type),
-            Node::Body(nodes) => {
+            Def(name) => write!(f, "(def {})", name),
+            Add(left, right) => write!(f, "({} + {})", left, right),
+            Sub(left, right) => write!(f, "({} - {})", left, right),
+            Mul(left, right) => write!(f, "({} * {})", left, right),
+            Div(left, right) => write!(f, "({} / {})", left, right),
+            Unit(unit) => write!(f, "{}", unit),
+            Num(num_type) => write!(f, "{}", num_type),
+            Assign(name, val) => write!(f, "({} = {})", name, val),
+            AddAssign(name, val) => write!(f, "({} += {})", name, val),
+            SubAssign(name, val) => write!(f, "({} -= {})", name, val),
+            MulAssign(name, val) => write!(f, "({} *= {})", name, val),
+            DivAssign(name, val) => write!(f, "({} /= {})", name, val),
+            Body(nodes) => {
                 writeln!(f, "Body(")?;
-                for node in nodes {
-                    writeln!(f, "{}", node)?;
+                for n in nodes {
+                    writeln!(f, "{}", n)?;
                 }
                 writeln!(f, ")")
             }
-            Node::Err => write!(f, "Err"),
+            Err => write!(f, "Error"),
         }
     }
 }
 
 macro_rules! impl_node_op {
-    ($op: ident) => {
+    (binop: $op: ident) => {
         impl<'a> std::ops::$op<Node<'a>> for Node<'a> {
             type Output = Node<'a>;
 
             paste! {
-                fn [<$op:lower>](self, rhs: Node<'a>) -> Self::Output {
+                fn [<$op:snake>](self, rhs: Node<'a>) -> Self::Output {
                     Self::Output::$op(self.into(), rhs.into())
+                }
+            }
+        }
+    };
+
+    (assign: $op: ident) => {
+        impl<'a> std::ops::$op<Node<'a>> for Node<'a> {
+            paste! {
+                fn [<$op:snake>](&mut self, other: Self) {
+                    // Self::Output::$op(self.into(), rhs.into())
+                    if let Node::Unit(name) = *self {
+                        *self = Node::$op(name, other.into());
+                    } else {
+                        panic!("You can only {} to the Node::Unit enum", stringify!($op))
+                    }
                 }
             }
         }
     };
 }
 
-impl_node_op!(Mul);
-impl_node_op!(Div);
-impl_node_op!(Add);
-impl_node_op!(Sub);
+impl_node_op!(binop: Mul);
+impl_node_op!(binop: Div);
+impl_node_op!(binop: Add);
+impl_node_op!(binop: Sub);
+
+impl_node_op!(assign: AddAssign);
+impl_node_op!(assign: SubAssign);
+impl_node_op!(assign: MulAssign);
+impl_node_op!(assign: DivAssign);
 
 fn flat_merge_rich_reason<'a, T, L>(
     r1: RichReason<'a, T, L>,
@@ -203,11 +255,9 @@ pub enum ParseErrorType {
 }
 
 impl ParseErrorType {
-
     pub fn code(&self) -> u32 {
-       *self as usize as u32 
+        *self as usize as u32
     }
-
 
     fn desc(&self) -> &'static str {
         match self {
@@ -230,7 +280,7 @@ impl Default for ParseErrorType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ParseError<'a> {
     pub span: SimpleSpan<usize>,
     pub reason: Box<RichReason<'a, Token<'a>, &'static str>>,
@@ -253,7 +303,7 @@ impl<'a> ParseError<'a> {
     }
 
     pub fn err_code(&self) -> u32 {
-        self.typ.code() 
+        self.typ.code()
     }
 
     pub fn set_type(&mut self, typ: ParseErrorType) {
@@ -417,4 +467,5 @@ where
 }
 
 // pub type ParseError<'a> = chumsky::error::Rich<'a, Token<'a>>;
-pub type ParseResult<'a> = chumsky::ParseResult<Node<'a>, ParseError<'a>>;
+// pub type ParseResult<'a> = chumsky::ParseResult<Node<'a>, ParseError<'a>>;
+pub type ParseResult<'a> = (Option<Node<'a>>, Vec<ParseError<'a>>);

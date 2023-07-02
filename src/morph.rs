@@ -14,16 +14,15 @@ pub fn parse(src: &str) -> ParseResult {
 
     let token_stream = Stream::from_iter(token_iter).spanned((src.len()..src.len()).into());
 
-    Node::parser().parse(token_stream)
+    Node::parser().parse(token_stream).into_output_errors()
 }
 
 pub fn run(file_name: &str, src: &str) {
-    let res = parse(src);
+    let (root, errors) = parse(src);
 
-    for err in res.errors() {
+    for err in errors {
         Report::build(ReportKind::Error, file_name, err.span().start)
-            // .with_message(err.to_string()) //TODO:: General error code + short overview of error
-            .with_message(err.typ.to_string()) //TODO:: General error code + short overview of error
+            .with_message(err.typ.to_string())
             .with_code(err.err_code())
             .with_label(
                 Label::new((file_name, err.span().into_range()))
@@ -35,29 +34,11 @@ pub fn run(file_name: &str, src: &str) {
             .unwrap();
     }
 
-    if let Some(ast) = res.output() {
+    if let Some(ast) = root {
         println!("{}", ast);
     } else {
         println!("ERROR: nothing was parsed");
     }
-
-    // match res {
-    //     Ok(n) => println!("{}", n.to_code()),
-    //     Err(errs) => {
-    //         for err in errs {
-    //             Report::build(ReportKind::Error, (), err.span().start)
-    //                 .with_message(err.to_string())
-    //                 .with_label(
-    //                     Label::new(err.span().into_range())
-    //                         .with_message(err.reason().to_string())
-    //                         .with_color(Color::Red),
-    //                 )
-    //                 .finish()
-    //                 .eprint(Source::from(src))
-    //                 .unwrap();
-    //         }
-    //     }
-    // }
 }
 
 #[cfg(test)]
@@ -80,19 +61,9 @@ pub mod test_utils {
         };
     }
 
-    macro_rules! get_reason {
-        ($parse: expr) => {
-            $parse.into_errors().swap_remove(0).into_reason()
-        };
-
-        ($parse: expr, $n: literal) => {
-            $parse.into_errors().swap_remove($n).into_reason()
-        };
-    }
-
     pub(crate) use bod;
     pub(crate) use eq;
-    pub(crate) use get_reason;
+    use rust_decimal::Decimal;
 
     pub fn u(name: &str) -> Node {
         Node::Unit(name)
@@ -102,8 +73,8 @@ pub mod test_utils {
         Node::Def(name)
     }
 
-    pub fn n(val: NumType) -> Node<'static> {
-        Node::Num(val)
+    pub fn n<I: Into<Decimal>>(val: I) -> Node<'static> {
+        Node::Num(val.into())
     }
 
     type Reason<'a> = chumsky::error::RichReason<'a, Token<'a>, &'a str>;
@@ -134,6 +105,6 @@ pub mod test_utils {
     }
 
     pub fn nodes(code: &str) -> Node {
-        morph::parse(code).unwrap()
+        morph::parse(code).0.unwrap()
     }
 }
