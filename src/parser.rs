@@ -1,5 +1,6 @@
 use std::ops;
 
+use crate::error::*;
 use crate::types::*;
 
 use chumsky::{input::ValueInput, prelude::*, primitive};
@@ -34,47 +35,61 @@ macro_rules! cast_enum {
     }};
 }
 
+macro_rules! parse {
+    (num) => {
+        select!(Token::Num(x) => NodeType::Num(x)).map_with_span(Node::new)
+    };
+
+    (unit) => {
+        select!(Token::Unit(x) => NodeType::Unit(x)).map_with_span(Node::new)
+    };
+
+    (num * unit) => {
+        parse!(num).then(parse!(unit)).map(|(x1, x2)| x1 * x2)
+    };
+}
+
 impl<'a> Node<'a> {
-    pub fn parser<I>() -> Boxed<'a, 'a, I, Self, extra::Err<ParseError<'a>>>
+    pub fn syntax_err<I>() -> Boxed<'a, 'a, I, Node<'a>, extra::Err<ParseError<'a>>>
     where
         I: ValueInput<'a, Token = Token<'a>, Span = SimpleSpan>,
     {
-        let unit = select!(Token::Unit(x) => Node::Unit(x));
+        primitive::select::<'_, _, I, &str, extra::Err<ParseError<'a>>>(|x, _| match x {
+            Token::LexErr(err) => Some(err),
+            _ => None,
+        })
+        .validate(|x, span, emit| {
+            emit.emit(ParseError::custom(
+                span,
+                format!("unsupported character: {}", x),
+                ParseErrorType::CouldNotLex,
+            ))
+        })
+        .map_with_span(|_, span| Node::err(span))
+        .boxed()
+    }
 
-        let num = select!(Token::Num(x) => Node::Num(x));
-
-        let num_unit = num.then(unit).map(|x| {
-            cast_enum!(x => (Node::Num(n), Node::Unit(name)) {
-                return Node::Mul(Node::Num(n).into(), Node::Unit(name).into())
-            });
-        });
-
-        let syntax_err =
-            primitive::select::<'_, _, I, &str, extra::Err<ParseError<'a>>>(|x, _| match x {
-                Token::LexErr(err) => Some(err),
-                _ => None,
-            })
-            .validate(|x, span, emit| {
-                emit.emit(ParseError::custom(
-                    span,
-                    format!("unsupported character: {}", x),
-                    ParseErrorType::CouldNotLex,
-                ))
-            })
-            .map(|_| Node::Err);
-
+    pub fn expression<I>(
+        scope_parser: impl Parser<'a, I, Node<'a>, extra::Err<ParseError<'a>>> + 'a,
+    ) -> Boxed<'a, 'a, I, Node<'a>, extra::Err<ParseError<'a>>>
+    where
+        I: ValueInput<'a, Token = Token<'a>, Span = SimpleSpan>,
+    {
         let expr = recursive(|expr| {
             let atom = choice((
                 expr.delimited_by(just(Token::LParen), just(Token::RParen)),
-                num_unit,
-                unit,
-                num,
+                scope_parser.delimited_by(just(Token::LCurly), just(Token::RCurly)),
+                parse!(num * unit),
+                parse!(unit),
+                parse!(num),
             ))
             .map_err(|err: ParseError| merge_expected!(err::<I>, [Token::NUM, Token::UNIT]));
 
             let unary = just(Token::Sub)
+                .map_with_span(|_, span| Node::new(NodeType::Num(num!(-1)), span))
                 .repeated()
-                .foldr(atom, |_op, rhs| Node::Num(dec!(-1)) * rhs);
+                .foldr(atom, |op, rhs| op * rhs)
+                .boxed();
 
             let product = unary.clone().foldl(
                 choice((
@@ -96,63 +111,98 @@ impl<'a> Node<'a> {
                 |lhs, (op, rhs)| op(lhs, rhs),
             );
 
-            let assign = unit.clone().foldl(
+            let assign = parse!(unit).foldl(
                 choice((
-                    just(Token::Assign).to(Node::Assign as fn(&'a str, Box<Node<'a>>) -> Node<'a>),
+                    just(Token::Assign).to(Node::assign as fn(&mut Node<'a>, Node<'a>)),
                     just(Token::AddAssign)
-                        .to(Node::AddAssign as fn(&'a str, Box<Node<'a>>) -> Node<'a>),
+                        .to(ops::AddAssign::add_assign as fn(&mut Node<'a>, Node<'a>)),
                     just(Token::SubAssign)
-                        .to(Node::SubAssign as fn(&'a str, Box<Node<'a>>) -> Node<'a>),
+                        .to(ops::SubAssign::sub_assign as fn(&mut Node<'a>, Node<'a>)),
                     just(Token::MulAssign)
-                        .to(Node::MulAssign as fn(&'a str, Box<Node<'a>>) -> Node<'a>),
+                        .to(ops::MulAssign::mul_assign as fn(&mut Node<'a>, Node<'a>)),
                     just(Token::DivAssign)
-                        .to(Node::DivAssign as fn(&'a str, Box<Node<'a>>) -> Node<'a>),
+                        .to(ops::DivAssign::div_assign as fn(&mut Node<'a>, Node<'a>)),
                 ))
                 .then(sum.clone())
                 .repeated()
                 .at_least(1),
-                |lhs: Node, (op, rhs): (_, Node)| {
-                    op(cast_enum!(lhs => (Node::Unit(name)) {name}), Box::new(rhs))
+                |mut lhs: Node, (op, rhs): (_, Node)| {
+                    op(&mut lhs, rhs);
+                    lhs
                 },
             );
 
-            assign.or(sum)
+            let def = just(Token::Def)
+                .ignore_then(parse!(unit))
+                .map_with_span(|x: Node, span: SimpleSpan| cast_enum!(x.typ => (NodeType::Unit(name)) {return Node::new(NodeType::Def(name), span)}))
+                .map_err(|err: ParseError| merge_expected!(err::<I>, [Token::UNIT]));
+
+            choice((assign, sum, def))
         });
 
-        let def = just(Token::Def)
-            .ignore_then(unit)
-            .map(|u| cast_enum!(u => (Node::Unit(name)) {return Node::Def(name)}))
-            .map_err(|err: ParseError| merge_expected!(err::<I>, [Token::UNIT]));
+        choice((expr, Self::syntax_err())).boxed()
+    }
 
-        let expr = choice((expr, def, syntax_err));
+    pub fn parser<I>() -> Boxed<'a, 'a, I, Node<'a>, extra::Err<ParseError<'a>>>
+    where
+        I: ValueInput<'a, Token = Token<'a>, Span = SimpleSpan>,
+    {
+        let scope = recursive(|scope| {
+            just(Token::NL)
+                .repeated()
+                .ignore_then(
+                    Self::expression(scope)
+                        .then_ignore(choice((
+                            just(Token::NL).repeated().at_least(1),
+                            just(Token::RCurly).to(()),
+                            end()
+                        )))
+                        .map_err(|mut err: ParseError| {
+                            set_err_type!(err, ParseErrorType::UndefinedSyntax)
+                        })
+                        .recover_with(via_parser(
+                            none_of([Token::NL, Token::RCurly])
+                                .repeated()
+                                .at_least(1)
+                                .map_with_span(|_, span| Node::err(span)),
+                        )),
+                )
+                .repeated()
+                .collect::<Vec<_>>()
+                .map_with_span(|x, span| Node::new(NodeType::Scope(x), span))
+        });
 
-        let body = just(Token::NL)
-            .repeated()
-            .ignore_then(
-                expr.then_ignore(just(Token::NL).clone().repeated().at_least(1).or(end()))
-                    .map_err(|mut err: ParseError| {
-                        set_err_type!(err, ParseErrorType::UndefinedSyntax)
-                    })
-                    .recover_with(via_parser(
-                        none_of(Token::NL).repeated().at_least(1).map(|_| Node::Err),
-                    )),
-            )
-            .repeated()
-            .collect::<Vec<_>>()
-            .map(Node::Body);
+        // let scopes =
+        //     just(Token::NL)
+        //     .repeated()
+        //     .ignore_then(
+        //         expr.then_ignore(choice((just(Token::NL).repeated().at_least(1), end())))
+        //             .map_err(|mut err: ParseError| {
+        //                 set_err_type!(err, ParseErrorType::UndefinedSyntax)
+        //             })
+        //             .recover_with(via_parser(
+        //                 none_of([Token::NL])
+        //                     .repeated()
+        //                     .at_least(1)
+        //                     .map_with_span(|_, span| Node::err(span)),
+        //             )),
+        //     )
+        //     .repeated()
+        //     .collect::<Vec<_>>()
+        //     .map_with_span(|x, span| Node::new(NodeType::Scope(x), span));
 
         let empty = just(Token::NL)
             .repeated()
             .then(end())
-            .map(|(_, _)| Node::Body(vec![]));
+            .map(|(_, _)| Node::new(NodeType::Scope(vec![]), 0..0));
 
-        empty.or(body).boxed()
+        empty.or(scope).boxed()
     }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::{morph::test_utils::*, types::*};
+    use crate::{error::*, morph::test_utils::*, types::*};
 
     #[test]
     fn basic_expr() {
@@ -198,6 +248,13 @@ mod test {
         b += u("m") + n(3) * n(2);
         eq!(nodes("b += m + 3 * 2"), bod!(b));
 
+        let mut c = u("c");
+        c *= u("m") / u("s");
+        eq!(nodes("c *= m / s"), bod!(c));
+
+        let mut d = u("d");
+        d /= n(0);
+        eq!(nodes("d /= 0"), bod!(d));
     }
 
     #[test]

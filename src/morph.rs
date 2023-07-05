@@ -1,3 +1,5 @@
+use crate::error::*;
+use crate::eval::*;
 use crate::types::*;
 
 use ariadne::Source;
@@ -35,7 +37,12 @@ pub fn run(file_name: &str, src: &str) {
     }
 
     if let Some(ast) = root {
-        println!("{}", ast);
+        let context = Context::new();
+        if let Some(res) = ast.clone().eval(context) {
+            println!("{}", res);
+        } else {
+            println!("error while running: \n{}", ast);
+        }
     } else {
         println!("ERROR: nothing was parsed");
     }
@@ -51,7 +58,7 @@ pub mod test_utils {
             #[allow(unused_mut)]
             let mut vec = Vec::new();
             $(vec.push($x);)*
-            crate::types::Node::Body(vec)
+            crate::types::NodeType::Scope(vec)
         }};
     }
 
@@ -66,15 +73,15 @@ pub mod test_utils {
     use rust_decimal::Decimal;
 
     pub fn u(name: &str) -> Node {
-        Node::Unit(name)
+        Node::new(NodeType::Unit(name), 0..0)
     }
 
     pub fn d(name: &str) -> Node {
-        Node::Def(name)
+        Node::new(NodeType::Def(name), 0..0)
     }
 
     pub fn n<I: Into<Decimal>>(val: I) -> Node<'static> {
-        Node::Num(val.into())
+        Node::new(NodeType::Num(val.into()), 0..0)
     }
 
     type Reason<'a> = chumsky::error::RichReason<'a, Token<'a>, &'a str>;
@@ -104,7 +111,7 @@ pub mod test_utils {
         morph::parse(code)
     }
 
-    pub fn nodes(code: &str) -> Node {
-        morph::parse(code).0.unwrap()
+    pub fn nodes(code: &str) -> NodeType {
+        morph::parse(code).0.unwrap().into()
     }
 }

@@ -1,9 +1,17 @@
+mod error;
+mod eval;
 mod morph;
 mod parser;
 mod types;
 
 const SRC: &str = r"
-b = m + 3 * 2
+def m
+
+d = {
+    d = 3m
+}
+
+d
 ";
 
 fn main() {
