@@ -125,7 +125,6 @@ impl<'a> MorphError<'a> {
     }
 
     pub fn report(&self, file_name: &str, src: &str) {
-        println!("{}", self.span);
         Report::build(ReportKind::Error, file_name, self.span.start)
             .with_message(self.typ.to_string())
             .with_code(self.err_code())

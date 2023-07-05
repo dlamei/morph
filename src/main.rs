@@ -7,9 +7,14 @@ mod types;
 const SRC: &str = r"
 def m
 meter = m
+meters = m
 def s
+second = s
+seconds = s
 
-3 * meter / s / 0
+
+a = { res = 3 m / s; res *= 1 s; } //TODO: fix return from scope
+a
 ";
 
 fn main() {

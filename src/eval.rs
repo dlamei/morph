@@ -21,17 +21,22 @@ impl<'a> Default for ContextCore<'a> {
 }
 
 impl<'a> ContextCore<'a> {
-    pub fn assign(&mut self, name: &'a str, value: Quantity<'a>) -> RuntimeResult<'a> {
+    pub fn assign(&mut self, name: &'a str, mut value: Quantity<'a>, span: Range<usize>) -> RuntimeResult<'a> {
         if self.base_units.contains_key(name) {
             Err(MorphError::custom(value.span.into(), format!("base unit {} is not assignable", name), ErrorType::UnsupportedAttribute))
         } else {
+            value.span = span;
             self.vars.insert(name, value.clone());
             Ok(value)
         }
     }
 
     pub fn var(&mut self, name: &'a str, span: Range<usize>) -> RuntimeResult<'a> {
-        let found = self.vars.get_mut(name).map(|x| x.clone());
+        let found = self.vars.get_mut(name).map(|x| {
+            let mut ret = x.clone();
+            ret.span = span.clone();
+            ret
+        });
 
         if found.is_none() {
             if let Some(p) = &mut self.parent {
@@ -53,7 +58,11 @@ impl<'a> ContextCore<'a> {
 
     pub fn unit(&mut self, name: &'a str, span: Range<usize>) -> RuntimeResult<'a> {
         // self.base_units.get(name).map(|x| x.clone().into())
-        let found = self.base_units.get_mut(name).map(|x| x.clone());
+        let found = self.base_units.get_mut(name).map(|x| {
+            let mut ret = x.clone();
+            ret.span = span.clone();
+            ret
+        });
 
         if found.is_none() {
             if let Some(p) = &mut self.parent {
@@ -103,8 +112,8 @@ impl<'a> Context<'a> {
         }
     }
 
-    pub fn assign(&mut self, name: &'a str, value: Quantity<'a>) -> RuntimeResult<'a> {
-        self.0.borrow_mut().assign(name, value)
+    pub fn assign(&mut self, name: &'a str, value: Quantity<'a>, span: Range<usize>) -> RuntimeResult<'a> {
+        self.0.borrow_mut().assign(name, value, span)
     }
 
     pub fn var(&mut self, name: &'a str, span: Range<usize>) -> RuntimeResult<'a> {
@@ -138,27 +147,27 @@ impl<'a> Node<'a> {
             Num(num) => Ok(Quantity::num(num, self.span)),
             Assign(name, val) => {
                 let val = val.eval(cntxt.clone())?;
-                cntxt.assign(name, val)
+                cntxt.assign(name, val, self.span)
             }
             AddAssign(lhs, rhs) => {
-                let var = cntxt.var(lhs, self.span)?;
+                let var = cntxt.var(lhs, self.span.clone())?;
                 let res = var + rhs.eval(cntxt.clone())?;
-                cntxt.assign(lhs, res?)
+                cntxt.assign(lhs, res?, self.span)
             }
             SubAssign(lhs, rhs) => {
-                let var = cntxt.var(lhs, self.span)?;
+                let var = cntxt.var(lhs, self.span.clone())?;
                 let res = var - rhs.eval(cntxt.clone())?;
-                cntxt.assign(lhs, res?)
+                cntxt.assign(lhs, res?, self.span)
             }
             MulAssign(lhs, rhs) => {
-                let var = cntxt.var(lhs, self.span)?;
+                let var = cntxt.var(lhs, self.span.clone())?;
                 let res = var * rhs.eval(cntxt.clone())?;
-                cntxt.assign(lhs, res?)
+                cntxt.assign(lhs, res?, self.span)
             }
             DivAssign(lhs, rhs) => {
-                let var = cntxt.var(lhs, self.span)?;
+                let var = cntxt.var(lhs, self.span.clone())?;
                 let res = var / rhs.eval(cntxt.clone())?;
-                cntxt.assign(lhs, res?)
+                cntxt.assign(lhs, res?, self.span)
             }
             Scope(vec) => {
                 let mut res: Option<RuntimeResult<'a>> = None;
