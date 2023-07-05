@@ -1,10 +1,11 @@
-use std::{collections::HashMap, cell::RefCell, rc::Rc};
+use std::{collections::HashMap, cell::RefCell, rc::Rc, ops::Range};
 
 use crate::types::*;
+use crate::error::*;
 
 #[derive(Debug, Clone)]
 pub struct ContextCore<'a> {
-    pub base_units: HashMap<&'a str, UnitAtom<'a>>,
+    pub base_units: HashMap<&'a str, Quantity<'a>>,
     pub vars: HashMap<&'a str, Quantity<'a>>,
     pub parent: Option<Context<'a>>,
 }
@@ -20,56 +21,56 @@ impl<'a> Default for ContextCore<'a> {
 }
 
 impl<'a> ContextCore<'a> {
-    pub fn assign(&mut self, name: &'a str, value: Quantity<'a>) -> Option<Quantity<'a>> {
+    pub fn assign(&mut self, name: &'a str, value: Quantity<'a>) -> RuntimeResult<'a> {
         if self.base_units.contains_key(name) {
-            None
+            Err(MorphError::custom(value.span.into(), format!("base unit {} is not assignable", name), ErrorType::UnsupportedAttribute))
         } else {
             self.vars.insert(name, value.clone());
-            Some(value)
+            Ok(value)
         }
     }
 
-    pub fn var(&mut self, name: &'a str) -> Option<Quantity<'a>> {
+    pub fn var(&mut self, name: &'a str, span: Range<usize>) -> RuntimeResult<'a> {
         let found = self.vars.get_mut(name).map(|x| x.clone());
 
         if found.is_none() {
             if let Some(p) = &mut self.parent {
-                return p.var(name);
+                return p.var(name, span);
             }
         }
 
-        found
+        found.ok_or(MorphError::custom(span.into(), format!("use of undeclared variable '{}'", name), ErrorType::UndefinedIdent))
     }
 
-    pub fn define(&mut self, name: &'a str) -> Option<Quantity<'a>> {
+    pub fn define(&mut self, name: &'a str, span: Range<usize>) -> RuntimeResult<'a> {
         if self.base_units.contains_key(name) {
-            None
+            Err(MorphError::custom(span.into(), format!("base unit {} is not redefinable", name), ErrorType::UnsupportedAttribute))
         } else {
-            self.base_units.insert(name, UnitAtom::base(name));
-            Some(UnitAtom::base(name).into())
+            self.base_units.insert(name, Quantity::base(name, span.clone()));
+            Ok(Quantity::base(name, span))
         }
     }
 
-    pub fn unit(&mut self, name: &'a str) -> Option<Quantity<'a>> {
+    pub fn unit(&mut self, name: &'a str, span: Range<usize>) -> RuntimeResult<'a> {
         // self.base_units.get(name).map(|x| x.clone().into())
-        let found = self.base_units.get_mut(name).map(|x| x.clone().into());
+        let found = self.base_units.get_mut(name).map(|x| x.clone());
 
         if found.is_none() {
             if let Some(p) = &mut self.parent {
-                return p.unit(name);
+                return p.unit(name, span);
             }
         }
 
-        found
+        found.ok_or(MorphError::custom(span.into(), format!("use of undeclared unit '{}'", name), ErrorType::UndefinedIdent))
     }
 
-    pub fn unit_or_var(&mut self, name: &'a str) -> Option<Quantity<'a>> {
-        if let Some(x) = self.unit(name) {
-            Some(x)
-        } else if let Some(x) = self.var(name) {
-            Some(x)
+    pub fn unit_or_var(&mut self, name: &'a str, span: Range<usize>) -> RuntimeResult<'a> {
+        if let Ok(x) = self.unit(name, span.clone()) {
+            Ok(x)
+        } else if let Ok(x) = self.var(name, span.clone()) {
+            Ok(x)
         } else {
-            None
+            Err(MorphError::custom(span.into(), format!("use of undeclared unit/variable '{}'", name), ErrorType::UndefinedIdent))
         }
     }
 }
@@ -102,77 +103,77 @@ impl<'a> Context<'a> {
         }
     }
 
-    pub fn assign(&mut self, name: &'a str, value: Quantity<'a>) -> Option<Quantity<'a>> {
+    pub fn assign(&mut self, name: &'a str, value: Quantity<'a>) -> RuntimeResult<'a> {
         self.0.borrow_mut().assign(name, value)
     }
 
-    pub fn var(&mut self, name: &'a str) -> Option<Quantity<'a>> {
-        self.0.borrow_mut().var(name)
+    pub fn var(&mut self, name: &'a str, span: Range<usize>) -> RuntimeResult<'a> {
+        self.0.borrow_mut().var(name, span)
     }
 
-    pub fn define(&mut self, name: &'a str) -> Option<Quantity<'a>> {
-        self.0.borrow_mut().define(name)
+    pub fn define(&mut self, name: &'a str, span: Range<usize>) -> RuntimeResult<'a> {
+        self.0.borrow_mut().define(name, span)
     }
 
-    pub fn unit(&mut self, name: &'a str) -> Option<Quantity<'a>> {
-        self.0.borrow_mut().unit(name)
+    pub fn unit(&mut self, name: &'a str, span: Range<usize>) -> RuntimeResult<'a> {
+        self.0.borrow_mut().unit(name, span)
     }
 
-    pub fn unit_or_var(&mut self, name: &'a str) -> Option<Quantity<'a>> {
-        self.0.borrow_mut().unit_or_var(name)
+    pub fn unit_or_var(&mut self, name: &'a str, span: Range<usize>) -> RuntimeResult<'a> {
+        self.0.borrow_mut().unit_or_var(name, span)
     }
 }
 
 impl<'a> Node<'a> {
-    pub fn eval(self, mut cntxt: Context<'a>) -> Option<Quantity<'a>> {
+    pub fn eval(self, mut cntxt: Context<'a>) -> RuntimeResult<'a> {
         use NodeType::*;
 
         match self.typ {
-            Def(name) => cntxt.define(name),
+            Def(name) => cntxt.define(name, self.span),
             Add(lhs, rhs) => lhs.eval(cntxt.clone())? + rhs.eval(cntxt)?,
             Sub(lhs, rhs) => lhs.eval(cntxt.clone())? - rhs.eval(cntxt)?,
             Mul(lhs, rhs) => lhs.eval(cntxt.clone())? * rhs.eval(cntxt)?,
             Div(lhs, rhs) => lhs.eval(cntxt.clone())? / rhs.eval(cntxt)?,
-            Unit(name) => cntxt.unit_or_var(name),
-            Num(num) => Some(Quantity::num(num)),
+            Unit(name) => cntxt.unit_or_var(name, self.span),
+            Num(num) => Ok(Quantity::num(num, self.span)),
             Assign(name, val) => {
                 let val = val.eval(cntxt.clone())?;
                 cntxt.assign(name, val)
             }
             AddAssign(lhs, rhs) => {
-                let var = cntxt.var(lhs)?;
+                let var = cntxt.var(lhs, self.span)?;
                 let res = var + rhs.eval(cntxt.clone())?;
                 cntxt.assign(lhs, res?)
             }
             SubAssign(lhs, rhs) => {
-                let var = cntxt.var(lhs)?;
+                let var = cntxt.var(lhs, self.span)?;
                 let res = var - rhs.eval(cntxt.clone())?;
                 cntxt.assign(lhs, res?)
             }
             MulAssign(lhs, rhs) => {
-                let var = cntxt.var(lhs)?;
+                let var = cntxt.var(lhs, self.span)?;
                 let res = var * rhs.eval(cntxt.clone())?;
                 cntxt.assign(lhs, res?)
             }
             DivAssign(lhs, rhs) => {
-                let var = cntxt.var(lhs)?;
+                let var = cntxt.var(lhs, self.span)?;
                 let res = var / rhs.eval(cntxt.clone())?;
                 cntxt.assign(lhs, res?)
             }
             Scope(vec) => {
-                let mut res: Option<Quantity<'a>> = None;
+                let mut res: Option<RuntimeResult<'a>> = None;
 
                 cntxt = Context::from_parent(cntxt);
 
                 for e in vec {
-                    res = Some(e.eval(cntxt.clone())?);
+                    res = Some(Ok(e.eval(cntxt.clone())?));
                 }
 
                 cntxt.into_parent();
 
-                res
+                res.unwrap_or(Ok(Quantity::num(0, self.span)))
             }
-            Err => unreachable!(),
+            ParseError => Err(MorphError::custom(self.span.into(), "encountered error from parse stage", ErrorType::UndefinedSyntax)),
         }
     }
 }

@@ -2,8 +2,6 @@ use crate::error::*;
 use crate::eval::*;
 use crate::types::*;
 
-use ariadne::Source;
-use ariadne::{Color, Label, Report, ReportKind};
 use logos::Logos;
 
 use chumsky::{input::Stream, prelude::Input, Parser};
@@ -22,27 +20,25 @@ pub fn parse(src: &str) -> ParseResult {
 pub fn run(file_name: &str, src: &str) {
     let (root, errors) = parse(src);
 
-    for err in errors {
-        Report::build(ReportKind::Error, file_name, err.span().start)
-            .with_message(err.typ.to_string())
-            .with_code(err.err_code())
-            .with_label(
-                Label::new((file_name, err.span().into_range()))
-                    .with_message(err.reason().to_string())
-                    .with_color(Color::Red),
-            )
-            .finish()
-            .eprint((file_name, Source::from(src)))
-            .unwrap();
+    for err in &errors {
+        err.report(file_name, src);
+    }
+
+    if !errors.is_empty() {
+        return
     }
 
     if let Some(ast) = root {
         let context = Context::new();
-        if let Some(res) = ast.clone().eval(context) {
-            println!("{}", res);
-        } else {
-            println!("error while running: \n{}", ast);
+        match ast.eval(context) {
+            Ok(res) => println!("{}", res),
+            Err(err) => err.report(file_name, src),
         }
+        // if let Ok(res) = ast.clone().eval(context) {
+        //     println!("{}", res);
+        // } else {
+
+        // }
     } else {
         println!("ERROR: nothing was parsed");
     }

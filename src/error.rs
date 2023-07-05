@@ -2,6 +2,7 @@ use std::fmt;
 
 use crate::types::*;
 
+use ariadne::{Source, Color, Label, Report, ReportKind};
 use chumsky::{
     error::{RichPattern, RichReason},
     prelude::Input,
@@ -59,53 +60,63 @@ where
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub enum ParseErrorType {
+pub enum ErrorType {
     Other = 0,
     CouldNotLex = 1,
     UndefinedSyntax = 2,
+    UnsupportedAttribute = 3,
+    UndefinedIdent = 4,
+    TypeError = 5,
+    ZeroDivision = 6,
 }
 
-impl ParseErrorType {
+impl ErrorType {
     pub fn code(&self) -> u32 {
         *self as usize as u32
     }
 
     fn desc(&self) -> &'static str {
+        use ErrorType::*;
+
         match self {
-            ParseErrorType::CouldNotLex => "CouldNotLex: unknown character found while lexing",
-            ParseErrorType::UndefinedSyntax => "UndefinedSynax: parser encountered syntax error",
-            ParseErrorType::Other => "",
+            CouldNotLex => "CouldNotLex: unknown character found while lexing",
+            UndefinedSyntax => "UndefinedSynax: parser encountered syntax error",
+            UnsupportedAttribute => "UnsupportedAttribute: object does not support the specified attribute",
+            UndefinedIdent => "UndefinedIdent: encountered undefined identifier at runtime",
+            TypeError => "UnsupportedType: type is not compatible",
+            ZeroDivision => "ZeroDivision: encountered zero division at runtime",
+            Other => "",
         }
     }
 }
 
-impl fmt::Display for ParseErrorType {
+impl fmt::Display for ErrorType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.desc())
     }
 }
 
-impl Default for ParseErrorType {
+impl Default for ErrorType {
     fn default() -> Self {
         Self::Other
     }
 }
 
 #[derive(Debug, PartialEq)]
-pub struct ParseError<'a> {
+pub struct MorphError<'a> {
     pub span: SimpleSpan<usize>,
     pub reason: Box<RichReason<'a, Token<'a>, &'static str>>,
-    pub typ: ParseErrorType,
+    pub typ: ErrorType,
 }
 
-impl fmt::Display for ParseError<'_> {
+impl fmt::Display for MorphError<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.reason)
     }
 }
 
-impl<'a> ParseError<'a> {
-    pub fn custom<M: ToString>(span: SimpleSpan<usize>, msg: M, typ: ParseErrorType) -> Self {
+impl<'a> MorphError<'a> {
+    pub fn custom<M: ToString>(span: SimpleSpan<usize>, msg: M, typ: ErrorType) -> Self {
         Self {
             span,
             reason: Box::new(RichReason::Custom(msg.to_string())),
@@ -113,12 +124,27 @@ impl<'a> ParseError<'a> {
         }
     }
 
+    pub fn report(&self, file_name: &str, src: &str) {
+        println!("{}", self.span);
+        Report::build(ReportKind::Error, file_name, self.span.start)
+            .with_message(self.typ.to_string())
+            .with_code(self.err_code())
+            .with_label(
+                Label::new((file_name, self.span.into_range()))
+                    .with_message(self.reason.to_string())
+                    .with_color(Color::Red),
+            )
+            .finish()
+            .eprint((file_name, Source::from(src)))
+            .unwrap();
+    }
+
     pub fn err_code(&self) -> u32 {
         self.typ.code()
     }
 
-    pub fn set_type(&mut self, typ: ParseErrorType) {
-        if self.typ == ParseErrorType::Other {
+    pub fn set_type(&mut self, typ: ErrorType) {
+        if self.typ == ErrorType::Other {
             self.typ = typ;
         }
     }
@@ -127,9 +153,9 @@ impl<'a> ParseError<'a> {
         &self.span
     }
 
-    pub fn reason(&self) -> &RichReason<'a, Token<'a>, &'a str> {
-        &self.reason
-    }
+    // pub fn reason(&self) -> &RichReason<'a, Token<'a>, &'a str> {
+    //     &self.reason
+    // }
 
     #[allow(dead_code)]
     pub fn into_reason(self) -> RichReason<'a, Token<'a>, &'a str> {
@@ -159,7 +185,7 @@ impl<'a> ParseError<'a> {
 }
 
 impl<'a, I: Input<'a, Token = Token<'a>, Span = SimpleSpan<usize>>> chumsky::error::Error<'a, I>
-    for ParseError<'a>
+    for MorphError<'a>
 where
     I::Token: PartialEq,
 {
@@ -277,6 +303,5 @@ where
     }
 }
 
-// pub type ParseError<'a> = chumsky::error::Rich<'a, Token<'a>>;
-// pub type ParseResult<'a> = chumsky::ParseResult<Node<'a>, ParseError<'a>>;
-pub type ParseResult<'a> = (Option<Node<'a>>, Vec<ParseError<'a>>);
+pub type RuntimeResult<'a> = Result<Quantity<'a>, MorphError<'a>>;
+pub type ParseResult<'a> = (Option<Node<'a>>, Vec<MorphError<'a>>);

@@ -6,12 +6,10 @@ mod types;
 
 const SRC: &str = r"
 def m
+meter = m
+def s
 
-d = {
-    d = 3m
-}
-
-d
+3 * meter / s / 0
 ";
 
 fn main() {

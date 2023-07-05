@@ -8,6 +8,8 @@ use rust_decimal_macros::dec;
 
 pub type NumType = Decimal;
 
+use crate::error::*;
+
 fn decimal<'a>(lex: &mut logos::Lexer<'a, Token<'a>>) -> Option<Decimal> {
     Decimal::from_str(lex.slice()).ok()
 }
@@ -135,7 +137,7 @@ pub enum NodeType<'a> {
 
     Scope(Vec<Node<'a>>),
 
-    Err,
+    ParseError,
 }
 
 pub fn merge_ranges(r1: &Range<usize>, r2: &Range<usize>) -> Range<usize> {
@@ -152,30 +154,30 @@ pub fn merge_ranges(r1: &Range<usize>, r2: &Range<usize>) -> Range<usize> {
 #[derive(Debug, Clone)]
 pub struct Node<'a> {
     pub typ: NodeType<'a>,
-    pub range: Range<usize>,
+    pub span: Range<usize>,
 }
 
 impl<'a> Node<'a> {
     pub fn new<I: Into<Range<usize>>>(typ: NodeType<'a>, range: I) -> Self {
         Self {
             typ,
-            range: range.into(),
+            span: range.into(),
         }
     }
 
     pub fn err<I: Into<Range<usize>>>(range: I) -> Self {
         Self {
-            typ: NodeType::Err,
-            range: range.into(),
+            typ: NodeType::ParseError,
+            span: range.into(),
         }
     }
 
     #[allow(dead_code)]
     pub fn assign(&mut self, other: Node<'a>) {
         if let NodeType::Unit(name) = self.typ {
-            let range = merge_ranges(&self.range, &other.range);
+            let range = merge_ranges(&self.span, &other.span);
             let typ = NodeType::Assign(name, other.into());
-            *self = Node { typ, range };
+            *self = Node { typ, span: range };
         } else {
             panic!("You can only Assign to the Node::Unit enum");
         }
@@ -212,7 +214,7 @@ impl<'a> fmt::Display for Node<'a> {
                 }
                 write!(f, "}}")
             }
-            Err => write!(f, "Error"),
+            ParseError => write!(f, "Error"),
         }
     }
 }
@@ -230,9 +232,9 @@ macro_rules! impl_node_op {
 
             paste! {
                 fn [<$op:snake>](self, rhs: Node<'a>) -> Self::Output {
-                    let range = merge_ranges(&self.range, &rhs.range);
+                    let span = merge_ranges(&self.span, &rhs.span);
                     let typ = NodeType::$op(self.into(), rhs.into());
-                    Node {typ, range}
+                    Node {typ, span}
                 }
             }
         }
@@ -244,9 +246,9 @@ macro_rules! impl_node_op {
                 fn [<$op:snake>](&mut self, other: Self) {
                     // Self::Output::$op(self.into(), rhs.into())
                     if let NodeType::Unit(name) = self.typ {
-                        let range = merge_ranges(&self.range, &other.range);
+                        let span = merge_ranges(&self.span, &other.span);
                         let typ = NodeType::$op(name, other.into());
-                        *self = Node {typ, range}
+                        *self = Node {typ, span}
                     } else {
                         panic!("You can only {} to the Node::Unit enum", stringify!($op))
                     }
@@ -385,43 +387,54 @@ impl<'a> ops::Div for Unit<'a> {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Quantity<'a> {
-    value: Decimal,
-    unit: Unit<'a>,
+    pub value: Decimal,
+    pub unit: Unit<'a>,
+    pub span: Range<usize>,
 }
 
 impl<'a> Quantity<'a> {
-    pub fn new<I: Into<Decimal>>(value: I, unit: Unit<'a>) -> Self {
+    pub fn new<I: Into<Decimal>>(value: I, unit: Unit<'a>, span: Range<usize>) -> Self {
         Self {
             value: value.into(),
             unit,
+            span
         }
     }
 
-    pub fn num<I: Into<Decimal>>(value: I) -> Self {
+    pub fn base(name: &'a str, span: Range<usize>) -> Self {
+        Self {
+            value: num!(1),
+            unit: UnitAtom::base(name).into(),
+            span
+        }
+    }
+
+    pub fn num<I: Into<Decimal>>(value: I, span: Range<usize>) -> Self {
         Self {
             value: value.into(),
             unit: Unit::none(),
+            span
         }
     }
 }
 
-impl<'a> From<UnitAtom<'a>> for Quantity<'a> {
-    fn from(unit: UnitAtom<'a>) -> Self {
-        Quantity {
-            value: num!(1),
-            unit: unit.into(),
-        }
-    }
-}
+// impl<'a> From<UnitAtom<'a>> for Quantity<'a> {
+//     fn from(unit: UnitAtom<'a>) -> Self {
+//         Quantity {
+//             value: num!(1),
+//             unit: unit.into(),
+//         }
+//     }
+// }
 
-impl<'a> From<Unit<'a>> for Quantity<'a> {
-    fn from(unit: Unit<'a>) -> Self {
-        Quantity {
-            value: num!(1),
-            unit,
-        }
-    }
-}
+// impl<'a> From<Unit<'a>> for Quantity<'a> {
+//     fn from(unit: Unit<'a>) -> Self {
+//         Quantity {
+//             value: num!(1),
+//             unit,
+//         }
+//     }
+// }
 
 impl<'a> fmt::Display for Quantity<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -430,22 +443,24 @@ impl<'a> fmt::Display for Quantity<'a> {
 }
 
 impl<'a> ops::Add for Quantity<'a> {
-    type Output = Option<Quantity<'a>>;
+    // type Output = Option<Quantity<'a>>;
+    type Output = RuntimeResult<'a>;
 
     fn add(self, rhs: Self) -> Self::Output {
         let mut res = self.clone();
 
         if self.unit == rhs.unit {
             res.value += rhs.value;
-            Some(res)
+            Ok(res)
         } else {
-            None
+            let span = merge_ranges(&self.span, &rhs.span);
+            Err(MorphError::custom(span.into(), format!("non-conformable units for +: ({} + {})", self.unit, rhs.unit), ErrorType::TypeError))
         }
     }
 }
 
 impl<'a> ops::Sub for Quantity<'a> {
-    type Output = Option<Quantity<'a>>;
+    type Output = RuntimeResult<'a>;
 
     fn sub(self, rhs: Self) -> Self::Output {
         let mut res = rhs.clone();
@@ -455,23 +470,26 @@ impl<'a> ops::Sub for Quantity<'a> {
 }
 
 impl<'a> ops::Mul for Quantity<'a> {
-    type Output = Option<Quantity<'a>>;
+    type Output = RuntimeResult<'a>;
 
     fn mul(self, rhs: Self) -> Self::Output {
         let res = self.unit * rhs.unit;
-        Some(Quantity::new(self.value * rhs.value, res))
+        let span = merge_ranges(&self.span, &rhs.span);
+        Ok(Quantity::new(self.value * rhs.value, res, span))
     }
 }
 
 impl<'a> ops::Div for Quantity<'a> {
-    type Output = Option<Quantity<'a>>;
+    type Output = RuntimeResult<'a>;
 
     fn div(self, rhs: Self) -> Self::Output {
         if rhs.value.is_zero() {
-            None
+            let span = merge_ranges(&self.span, &rhs.span);
+            Err(MorphError::custom(span.into(), format!("division by zero"), ErrorType::ZeroDivision))
         } else {
             let res = self.unit / rhs.unit;
-            Some(Quantity::new(self.value / rhs.value, res))
+            let span = merge_ranges(&self.span, &rhs.span);
+            Ok(Quantity::new(self.value / rhs.value, res, span))
         }
     }
 }

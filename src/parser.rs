@@ -50,19 +50,19 @@ macro_rules! parse {
 }
 
 impl<'a> Node<'a> {
-    pub fn syntax_err<I>() -> Boxed<'a, 'a, I, Node<'a>, extra::Err<ParseError<'a>>>
+    pub fn syntax_err<I>() -> Boxed<'a, 'a, I, Node<'a>, extra::Err<MorphError<'a>>>
     where
         I: ValueInput<'a, Token = Token<'a>, Span = SimpleSpan>,
     {
-        primitive::select::<'_, _, I, &str, extra::Err<ParseError<'a>>>(|x, _| match x {
+        primitive::select::<'_, _, I, &str, extra::Err<MorphError<'a>>>(|x, _| match x {
             Token::LexErr(err) => Some(err),
             _ => None,
         })
         .validate(|x, span, emit| {
-            emit.emit(ParseError::custom(
+            emit.emit(MorphError::custom(
                 span,
                 format!("unsupported character: {}", x),
-                ParseErrorType::CouldNotLex,
+                ErrorType::CouldNotLex,
             ))
         })
         .map_with_span(|_, span| Node::err(span))
@@ -70,8 +70,8 @@ impl<'a> Node<'a> {
     }
 
     pub fn expression<I>(
-        scope_parser: impl Parser<'a, I, Node<'a>, extra::Err<ParseError<'a>>> + 'a,
-    ) -> Boxed<'a, 'a, I, Node<'a>, extra::Err<ParseError<'a>>>
+        scope_parser: impl Parser<'a, I, Node<'a>, extra::Err<MorphError<'a>>> + 'a,
+    ) -> Boxed<'a, 'a, I, Node<'a>, extra::Err<MorphError<'a>>>
     where
         I: ValueInput<'a, Token = Token<'a>, Span = SimpleSpan>,
     {
@@ -83,7 +83,7 @@ impl<'a> Node<'a> {
                 parse!(unit),
                 parse!(num),
             ))
-            .map_err(|err: ParseError| merge_expected!(err::<I>, [Token::NUM, Token::UNIT]));
+            .map_err(|err: MorphError| merge_expected!(err::<I>, [Token::NUM, Token::UNIT]));
 
             let unary = just(Token::Sub)
                 .map_with_span(|_, span| Node::new(NodeType::Num(num!(-1)), span))
@@ -135,7 +135,7 @@ impl<'a> Node<'a> {
             let def = just(Token::Def)
                 .ignore_then(parse!(unit))
                 .map_with_span(|x: Node, span: SimpleSpan| cast_enum!(x.typ => (NodeType::Unit(name)) {return Node::new(NodeType::Def(name), span)}))
-                .map_err(|err: ParseError| merge_expected!(err::<I>, [Token::UNIT]));
+                .map_err(|err: MorphError| merge_expected!(err::<I>, [Token::UNIT]));
 
             choice((assign, sum, def))
         });
@@ -143,7 +143,7 @@ impl<'a> Node<'a> {
         choice((expr, Self::syntax_err())).boxed()
     }
 
-    pub fn parser<I>() -> Boxed<'a, 'a, I, Node<'a>, extra::Err<ParseError<'a>>>
+    pub fn parser<I>() -> Boxed<'a, 'a, I, Node<'a>, extra::Err<MorphError<'a>>>
     where
         I: ValueInput<'a, Token = Token<'a>, Span = SimpleSpan>,
     {
@@ -157,8 +157,8 @@ impl<'a> Node<'a> {
                             just(Token::RCurly).to(()),
                             end()
                         )))
-                        .map_err(|mut err: ParseError| {
-                            set_err_type!(err, ParseErrorType::UndefinedSyntax)
+                        .map_err(|mut err: MorphError| {
+                            set_err_type!(err, ErrorType::UndefinedSyntax)
                         })
                         .recover_with(via_parser(
                             none_of([Token::NL, Token::RCurly])
@@ -282,7 +282,7 @@ mod test {
 
     #[test]
     fn error_type() {
-        eq!(parse("$").1[0].typ, ParseErrorType::CouldNotLex);
-        eq!(parse("+ meter").1[0].typ, ParseErrorType::UndefinedSyntax);
+        eq!(parse("$").1[0].typ, ErrorType::CouldNotLex);
+        eq!(parse("+ meter").1[0].typ, ErrorType::UndefinedSyntax);
     }
 }
