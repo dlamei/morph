@@ -154,7 +154,7 @@ impl<'a> Node<'a> {
                     Self::expression(scope)
                         .then_ignore(choice((
                             just(Token::NL).repeated().at_least(1),
-                            just(Token::RCurly).to(()),
+                            just(Token::RCurly).to(()).rewind(),
                             end()
                         )))
                         .map_err(|mut err: MorphError| {

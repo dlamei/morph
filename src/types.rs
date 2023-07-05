@@ -23,7 +23,7 @@ macro_rules! num {
 pub(crate) use num;
 
 #[derive(Logos, Debug, PartialEq, Clone)]
-#[logos(skip r"[ \t\f]+")]
+#[logos(skip r"([ \t\f]+|//.*)")]
 #[logos(subpattern unicode_ident = r"\p{XID_Start}\p{XID_Continue}*")]
 #[logos(subpattern ascii_ident = r"[_a-zA-Z][_0-9a-zA-Z]*")]
 pub enum Token<'a> {
