@@ -4,7 +4,6 @@ use crate::error::*;
 use crate::types::*;
 
 use chumsky::{input::ValueInput, prelude::*, primitive};
-use rust_decimal_macros::dec;
 
 macro_rules! merge_expected {
     ($err: ident ::<$I: ty>, $exp_tok: expr) => {{
@@ -70,31 +69,52 @@ impl<'a> Node<'a> {
     }
 
     pub fn expression<I>(
-        scope_parser: impl Parser<'a, I, Node<'a>, extra::Err<MorphError<'a>>> + 'a,
+        scope_parser: impl Parser<'a, I, Node<'a>, extra::Err<MorphError<'a>>> + 'a + Clone,
     ) -> Boxed<'a, 'a, I, Node<'a>, extra::Err<MorphError<'a>>>
     where
         I: ValueInput<'a, Token = Token<'a>, Span = SimpleSpan>,
     {
         let expr = recursive(|expr| {
+            let def = just(Token::Def)
+                .ignore_then(parse!(unit))
+                .map_with_span(|x: Node, span: SimpleSpan| cast_enum!(x.typ => (NodeType::Unit(name)) {return Node::new(NodeType::Def(name), span)}))
+                .map_err(|err: MorphError| merge_expected!(err::<I>, [Token::UNIT]));
+
             let atom = choice((
-                expr.delimited_by(just(Token::LParen), just(Token::RParen)),
+                expr.clone()
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
                 scope_parser.delimited_by(just(Token::LCurly), just(Token::RCurly)),
                 parse!(num * unit),
                 parse!(unit),
                 parse!(num),
+                def,
             ))
             .map_err(|err: MorphError| merge_expected!(err::<I>, [Token::NUM, Token::UNIT]));
 
-            let unary = just(Token::Sub)
-                .map_with_span(|_, span| Node::new(NodeType::Num(num!(-1)), span))
-                .repeated()
-                .foldr(atom, |op, rhs| op * rhs)
-                .boxed();
+            let pow = atom
+                .clone()
+                .then_ignore(just(Token::Pow))
+                .then(atom.clone())
+                .map(|(n1, n2)| Node::pow(n1, n2));
+
+            let pow = choice((pow, atom.clone()));
+
+            let unary = choice((
+                just(Token::Sub).to(NodeType::UnrySub as fn(Box<Node<'a>>) -> NodeType<'a>),
+                just(Token::Not).to(NodeType::UnryNot as fn(Box<Node<'a>>) -> NodeType<'a>),
+            ))
+            .map_with_span(|op, span| (op, span))
+            .repeated()
+            .foldr(pow.clone(), |(op, span), val| {
+                    let typ = op(val.into());
+                    Node::new(typ, span)
+                })
+            ;
 
             let product = unary.clone().foldl(
                 choice((
-                    just(Token::Mul).to(ops::Mul::mul as fn(_, _) -> _),
-                    just(Token::Div).to(ops::Div::div as fn(_, _) -> _),
+                    just(Token::Mul).to(Node::mul as fn(_, _) -> _),
+                    just(Token::Div).to(Node::div as fn(_, _) -> _),
                 ))
                 .then(unary)
                 .repeated(),
@@ -103,8 +123,8 @@ impl<'a> Node<'a> {
 
             let sum = product.clone().foldl(
                 choice((
-                    just(Token::Add).to(ops::Add::add as fn(_, _) -> _),
-                    just(Token::Sub).to(ops::Sub::sub as fn(_, _) -> _),
+                    just(Token::Add).to(Node::add as fn(_, _) -> _),
+                    just(Token::Sub).to(Node::sub as fn(_, _) -> _),
                 ))
                 .then(product)
                 .repeated(),
@@ -132,12 +152,50 @@ impl<'a> Node<'a> {
                 },
             );
 
-            let def = just(Token::Def)
-                .ignore_then(parse!(unit))
-                .map_with_span(|x: Node, span: SimpleSpan| cast_enum!(x.typ => (NodeType::Unit(name)) {return Node::new(NodeType::Def(name), span)}))
-                .map_err(|err: MorphError| merge_expected!(err::<I>, [Token::UNIT]));
+            let assign = choice((assign, sum));
 
-            choice((assign, sum, def))
+            let logic = assign.clone().foldl(
+                choice((
+                    just(Token::Equal)
+                        .to(NodeType::Equal as fn(Box<Node<'a>>, Box<Node<'a>>) -> NodeType<'a>),
+                    just(Token::NeEqual)
+                        .to(NodeType::NeEqual as fn(Box<Node<'a>>, Box<Node<'a>>) -> NodeType<'a>),
+                    just(Token::GreaterEqual)
+                        .to(NodeType::GreaterEqual
+                            as fn(Box<Node<'a>>, Box<Node<'a>>) -> NodeType<'a>),
+                    just(Token::LesserEqual)
+                        .to(NodeType::LesserEqual
+                            as fn(Box<Node<'a>>, Box<Node<'a>>) -> NodeType<'a>),
+                    just(Token::Greater)
+                        .to(NodeType::Greater as fn(Box<Node<'a>>, Box<Node<'a>>) -> NodeType<'a>),
+                    just(Token::Lesser)
+                        .to(NodeType::Lesser as fn(Box<Node<'a>>, Box<Node<'a>>) -> NodeType<'a>),
+                ))
+                .then(assign.clone())
+                .repeated(),
+                |lhs: Node, (op, rhs): (_, Node)| {
+                    let span = merge_span(&lhs.span, &rhs.span);
+                    let typ = op(lhs.into(), rhs.into());
+                    Node::new(typ, span)
+                },
+            );
+
+            let r#if = just(Token::If)
+                .ignore_then(expr)
+                .then_ignore(just(Token::LCurly).rewind())
+                .then(atom)
+                .map_with_span(|(cond, scope): (Node, Node), span: SimpleSpan| {
+                    if let NodeType::Scope(_) = scope.typ {
+                        Node::new(
+                            NodeType::if_else(cond.into(), scope.into(), None),
+                            span.into_range(),
+                        )
+                    } else {
+                        unreachable!();
+                    }
+                });
+
+            choice((logic, r#if))
         });
 
         choice((expr, Self::syntax_err())).boxed()
@@ -155,7 +213,7 @@ impl<'a> Node<'a> {
                         .then_ignore(choice((
                             just(Token::NL).repeated().at_least(1),
                             just(Token::RCurly).to(()).rewind(),
-                            end()
+                            end(),
                         )))
                         .map_err(|mut err: MorphError| {
                             set_err_type!(err, ErrorType::UndefinedSyntax)
@@ -171,25 +229,6 @@ impl<'a> Node<'a> {
                 .collect::<Vec<_>>()
                 .map_with_span(|x, span| Node::new(NodeType::Scope(x), span))
         });
-
-        // let scopes =
-        //     just(Token::NL)
-        //     .repeated()
-        //     .ignore_then(
-        //         expr.then_ignore(choice((just(Token::NL).repeated().at_least(1), end())))
-        //             .map_err(|mut err: ParseError| {
-        //                 set_err_type!(err, ParseErrorType::UndefinedSyntax)
-        //             })
-        //             .recover_with(via_parser(
-        //                 none_of([Token::NL])
-        //                     .repeated()
-        //                     .at_least(1)
-        //                     .map_with_span(|_, span| Node::err(span)),
-        //             )),
-        //     )
-        //     .repeated()
-        //     .collect::<Vec<_>>()
-        //     .map_with_span(|x, span| Node::new(NodeType::Scope(x), span));
 
         let empty = just(Token::NL)
             .repeated()
@@ -272,7 +311,6 @@ mod test {
     #[test]
     fn syntax_err() {
         assert!(!parse("def me$ter").1.is_empty());
-        assert!(!parse("me<er").1.is_empty());
     }
 
     #[test]

@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::types::*;
 
-use ariadne::{Source, Color, Label, Report, ReportKind};
+use ariadne::{Color, Label, Report, ReportKind, Source};
 use chumsky::{
     error::{RichPattern, RichReason},
     prelude::Input,
@@ -81,7 +81,9 @@ impl ErrorType {
         match self {
             CouldNotLex => "CouldNotLex: unknown character found while lexing",
             UndefinedSyntax => "UndefinedSynax: parser encountered syntax error",
-            UnsupportedAttribute => "UnsupportedAttribute: object does not support the specified attribute",
+            UnsupportedAttribute => {
+                "UnsupportedAttribute: object does not support the specified attribute"
+            }
             UndefinedIdent => "UndefinedIdent: encountered undefined identifier at runtime",
             TypeError => "UnsupportedType: type is not compatible",
             ZeroDivision => "ZeroDivision: encountered zero division at runtime",
@@ -116,9 +118,13 @@ impl fmt::Display for MorphError<'_> {
 }
 
 impl<'a> MorphError<'a> {
-    pub fn custom<M: ToString>(span: SimpleSpan<usize>, msg: M, typ: ErrorType) -> Self {
+    pub fn custom<M: ToString, I: Into<SimpleSpan<usize>>>(
+        span: I,
+        msg: M,
+        typ: ErrorType,
+    ) -> Self {
         Self {
-            span,
+            span: span.into(),
             reason: Box::new(RichReason::Custom(msg.to_string())),
             typ,
         }

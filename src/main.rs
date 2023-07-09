@@ -8,13 +8,12 @@ const SRC: &str = r"
 def m
 meter = m
 meters = m
+km = 1000 m
+cm = 0.01 m
+mm = 0.1 cm
 def s
-second = s
-seconds = s
 
-
-a = { res = 3 m / s; res *= 1 s } //TODO: fix return from scope
-a
+1m != 1
 ";
 
 fn main() {

@@ -25,7 +25,7 @@ pub fn run(file_name: &str, src: &str) {
     }
 
     if !errors.is_empty() {
-        return
+        return;
     }
 
     if let Some(ast) = root {
