@@ -1,29 +1,28 @@
-use std::{collections::HashMap, cell::RefCell, rc::Rc, ops::Range};
+use std::{cell::RefCell, collections::HashMap, ops::Range, rc::Rc};
 
-use crate::types::*;
 use crate::error::*;
+use crate::types::*;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ContextCore<'a> {
     pub base_units: HashMap<&'a str, Quantity<'a>>,
     pub vars: HashMap<&'a str, Quantity<'a>>,
     pub parent: Option<Context<'a>>,
 }
 
-impl<'a> Default for ContextCore<'a> {
-    fn default() -> Self {
-        ContextCore {
-            base_units: HashMap::new(),
-            vars: HashMap::new(),
-            parent: None,
-        }
-    }
-}
-
 impl<'a> ContextCore<'a> {
-    pub fn assign(&mut self, name: &'a str, mut value: Quantity<'a>, span: Range<usize>) -> RuntimeResult<'a> {
+    pub fn assign(
+        &mut self,
+        name: &'a str,
+        mut value: Quantity<'a>,
+        span: Range<usize>,
+    ) -> RuntimeResult<'a> {
         if self.base_units.contains_key(name) {
-            Err(MorphError::custom(value.span.into(), format!("base unit {} is not assignable", name), ErrorType::UnsupportedAttribute))
+            Err(MorphError::custom(
+                value.span.into(),
+                format!("base unit {} is not assignable", name),
+                ErrorType::UnsupportedAttribute,
+            ))
         } else {
             value.span = span;
             self.vars.insert(name, value.clone());
@@ -44,14 +43,23 @@ impl<'a> ContextCore<'a> {
             }
         }
 
-        found.ok_or(MorphError::custom(span.into(), format!("use of undeclared variable '{}'", name), ErrorType::UndefinedIdent))
+        found.ok_or(MorphError::custom(
+            span.into(),
+            format!("use of undeclared variable '{}'", name),
+            ErrorType::UndefinedIdent,
+        ))
     }
 
     pub fn define(&mut self, name: &'a str, span: Range<usize>) -> RuntimeResult<'a> {
         if self.base_units.contains_key(name) {
-            Err(MorphError::custom(span.into(), format!("base unit {} is not redefinable", name), ErrorType::UnsupportedAttribute))
+            Err(MorphError::custom(
+                span.into(),
+                format!("base unit {} is not redefinable", name),
+                ErrorType::UnsupportedAttribute,
+            ))
         } else {
-            self.base_units.insert(name, Quantity::base(name, span.clone()));
+            self.base_units
+                .insert(name, Quantity::base(name, span.clone()));
             Ok(Quantity::base(name, span))
         }
     }
@@ -70,7 +78,11 @@ impl<'a> ContextCore<'a> {
             }
         }
 
-        found.ok_or(MorphError::custom(span.into(), format!("use of undeclared unit '{}'", name), ErrorType::UndefinedIdent))
+        found.ok_or(MorphError::custom(
+            span.into(),
+            format!("use of undeclared unit '{}'", name),
+            ErrorType::UndefinedIdent,
+        ))
     }
 
     pub fn unit_or_var(&mut self, name: &'a str, span: Range<usize>) -> RuntimeResult<'a> {
@@ -79,7 +91,11 @@ impl<'a> ContextCore<'a> {
         } else if let Ok(x) = self.var(name, span.clone()) {
             Ok(x)
         } else {
-            Err(MorphError::custom(span.into(), format!("use of undeclared unit/variable '{}'", name), ErrorType::UndefinedIdent))
+            Err(MorphError::custom(
+                span.into(),
+                format!("use of undeclared unit/variable '{}'", name),
+                ErrorType::UndefinedIdent,
+            ))
         }
     }
 }
@@ -92,27 +108,32 @@ impl<'a> Context<'a> {
         Context(Rc::new(RefCell::new(Default::default())))
     }
 
-    pub fn from_parent(parent: Context<'a>) -> Self {
+    pub fn from_parent(parent: &Context<'a>) -> Self {
         let core = ContextCore {
             base_units: HashMap::new(),
             vars: HashMap::new(),
-            parent: Some(parent)
+            parent: Some(parent.clone()),
         };
 
         Context(Rc::new(RefCell::new(core)))
     }
 
-    #[allow(unused_assignments)]
-    pub fn into_parent(mut self) {
-        let parent = self.0.borrow().clone().parent;
+    // #[allow(unused_assignments)]
+    // pub fn into_parent(mut self) {
+    //     let parent = self.0.borrow().clone().parent;
 
-        match parent {
-            Some(parent) => self = parent,
-            None => panic!("not parent was defined!"),
-        }
-    }
+    //     match parent {
+    //         Some(parent) => self = parent,
+    //         None => panic!("not parent was defined!"),
+    //     }
+    // }
 
-    pub fn assign(&mut self, name: &'a str, value: Quantity<'a>, span: Range<usize>) -> RuntimeResult<'a> {
+    pub fn assign(
+        &mut self,
+        name: &'a str,
+        value: Quantity<'a>,
+        span: Range<usize>,
+    ) -> RuntimeResult<'a> {
         self.0.borrow_mut().assign(name, value, span)
     }
 
@@ -134,55 +155,65 @@ impl<'a> Context<'a> {
 }
 
 impl<'a> Node<'a> {
-    pub fn eval(self, mut cntxt: Context<'a>) -> RuntimeResult<'a> {
+    pub fn eval(self, cntxt: &mut Context<'a>) -> RuntimeResult<'a> {
         use NodeType::*;
 
+        let span = self.span.clone();
+
         match self.typ {
-            Def(name) => cntxt.define(name, self.span),
-            Add(lhs, rhs) => lhs.eval(cntxt.clone())? + rhs.eval(cntxt)?,
-            Sub(lhs, rhs) => lhs.eval(cntxt.clone())? - rhs.eval(cntxt)?,
-            Mul(lhs, rhs) => lhs.eval(cntxt.clone())? * rhs.eval(cntxt)?,
-            Div(lhs, rhs) => lhs.eval(cntxt.clone())? / rhs.eval(cntxt)?,
-            Unit(name) => cntxt.unit_or_var(name, self.span),
-            Num(num) => Ok(Quantity::num(num, self.span)),
+            Def(name) => cntxt.define(name, span),
+            Add(lhs, rhs) => lhs.eval(cntxt)? + rhs.eval(cntxt)?,
+            Sub(lhs, rhs) => lhs.eval(cntxt)? - rhs.eval(cntxt)?,
+            Mul(lhs, rhs) => lhs.eval(cntxt)? * rhs.eval(cntxt)?,
+            Div(lhs, rhs) => lhs.eval(cntxt)? / rhs.eval(cntxt)?,
+            Pow(_, _) => todo!(),
+            UnrySub(val) => {
+                let neg = -val.eval(cntxt)?;
+                neg
+            }
+            UnryNot(_) => todo!(),
+            Unit(name) => cntxt.unit_or_var(name, span),
+            Num(num) => Ok(Quantity::num(num, span)),
             Assign(name, val) => {
-                let val = val.eval(cntxt.clone())?;
-                cntxt.assign(name, val, self.span)
+                let val = val.eval(cntxt)?;
+                cntxt.assign(name, val, span)
             }
             AddAssign(lhs, rhs) => {
-                let var = cntxt.var(lhs, self.span.clone())?;
-                let res = var + rhs.eval(cntxt.clone())?;
-                cntxt.assign(lhs, res?, self.span)
+                let var = cntxt.var(lhs, span.clone())?;
+                let res = var + rhs.eval(cntxt)?;
+                cntxt.assign(lhs, res?, span)
             }
             SubAssign(lhs, rhs) => {
-                let var = cntxt.var(lhs, self.span.clone())?;
-                let res = var - rhs.eval(cntxt.clone())?;
-                cntxt.assign(lhs, res?, self.span)
+                let var = cntxt.var(lhs, span.clone())?;
+                let res = var - rhs.eval(cntxt)?;
+                cntxt.assign(lhs, res?, span)
             }
             MulAssign(lhs, rhs) => {
-                let var = cntxt.var(lhs, self.span.clone())?;
-                let res = var * rhs.eval(cntxt.clone())?;
-                cntxt.assign(lhs, res?, self.span)
+                let var = cntxt.var(lhs, span.clone())?;
+                let res = var * rhs.eval(cntxt)?;
+                cntxt.assign(lhs, res?, span)
             }
             DivAssign(lhs, rhs) => {
-                let var = cntxt.var(lhs, self.span.clone())?;
-                let res = var / rhs.eval(cntxt.clone())?;
-                cntxt.assign(lhs, res?, self.span)
+                let var = cntxt.var(lhs, span.clone())?;
+                let res = var / rhs.eval(cntxt)?;
+                cntxt.assign(lhs, res?, span)
             }
             Scope(vec) => {
                 let mut res: Option<RuntimeResult<'a>> = None;
 
-                cntxt = Context::from_parent(cntxt);
+                let mut child = Context::from_parent(cntxt);
 
                 for e in vec {
-                    res = Some(Ok(e.eval(cntxt.clone())?));
+                    res = Some(Ok(e.eval(&mut child)?));
                 }
 
-                cntxt.into_parent();
-
-                res.unwrap_or(Ok(Quantity::num(0, self.span)))
+                res.unwrap_or(Ok(Quantity::num(0, span)))
             }
-            ParseError => Err(MorphError::custom(self.span.into(), "encountered error from parse stage", ErrorType::UndefinedSyntax)),
+            ParseError => Err(MorphError::custom(
+                span.into(),
+                "encountered error from parse stage",
+                ErrorType::UndefinedSyntax,
+            )),
         }
     }
 }

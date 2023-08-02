@@ -4,7 +4,7 @@ use crate::error::*;
 use crate::types::*;
 
 use chumsky::{input::ValueInput, prelude::*, primitive};
-use rust_decimal_macros::dec;
+// use rust_decimal_macros::dec;
 
 macro_rules! merge_expected {
     ($err: ident ::<$I: ty>, $exp_tok: expr) => {{
@@ -70,26 +70,47 @@ impl<'a> Node<'a> {
     }
 
     pub fn expression<I>(
-        scope_parser: impl Parser<'a, I, Node<'a>, extra::Err<MorphError<'a>>> + 'a,
+        scope_parser: impl Parser<'a, I, Node<'a>, extra::Err<MorphError<'a>>> + 'a + Clone,
     ) -> Boxed<'a, 'a, I, Node<'a>, extra::Err<MorphError<'a>>>
     where
         I: ValueInput<'a, Token = Token<'a>, Span = SimpleSpan>,
     {
         let expr = recursive(|expr| {
+            let def = just(Token::Def)
+                .ignore_then(parse!(unit))
+                .map_with_span(|x: Node, span: SimpleSpan| cast_enum!(x.typ => (NodeType::Unit(name)) {return Node::new(NodeType::Def(name), span)}))
+                .map_err(|err: MorphError| merge_expected!(err::<I>, [Token::UNIT]));
+
             let atom = choice((
-                expr.delimited_by(just(Token::LParen), just(Token::RParen)),
+                expr.clone()
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
                 scope_parser.delimited_by(just(Token::LCurly), just(Token::RCurly)),
                 parse!(num * unit),
                 parse!(unit),
                 parse!(num),
+                def,
             ))
             .map_err(|err: MorphError| merge_expected!(err::<I>, [Token::NUM, Token::UNIT]));
 
-            let unary = just(Token::Sub)
-                .map_with_span(|_, span| Node::new(NodeType::Num(num!(-1)), span))
-                .repeated()
-                .foldr(atom, |op, rhs| op * rhs)
-                .boxed();
+            let pow = atom
+                .clone()
+                .then_ignore(just(Token::Pow))
+                .then(atom.clone())
+                .map(|(n1, n2)| Node::pow(n1, n2));
+
+            let pow = choice((pow, atom.clone()));
+
+            let unary = choice((
+                just(Token::Sub).to(NodeType::UnrySub as fn(Box<Node<'a>>) -> NodeType<'a>),
+                just(Token::Not).to(NodeType::UnryNot as fn(Box<Node<'a>>) -> NodeType<'a>),
+            ))
+            .map_with_span(|op, span| (op, span))
+            .repeated()
+            .foldr(pow, |(op, span), val| {
+                let typ = op(val.into());
+                Node::new(typ, span)
+            })
+            .boxed();
 
             let product = unary.clone().foldl(
                 choice((
@@ -132,12 +153,7 @@ impl<'a> Node<'a> {
                 },
             );
 
-            let def = just(Token::Def)
-                .ignore_then(parse!(unit))
-                .map_with_span(|x: Node, span: SimpleSpan| cast_enum!(x.typ => (NodeType::Unit(name)) {return Node::new(NodeType::Def(name), span)}))
-                .map_err(|err: MorphError| merge_expected!(err::<I>, [Token::UNIT]));
-
-            choice((assign, sum, def))
+            choice((assign, sum))
         });
 
         choice((expr, Self::syntax_err())).boxed()
@@ -155,7 +171,7 @@ impl<'a> Node<'a> {
                         .then_ignore(choice((
                             just(Token::NL).repeated().at_least(1),
                             just(Token::RCurly).to(()).rewind(),
-                            end()
+                            end(),
                         )))
                         .map_err(|mut err: MorphError| {
                             set_err_type!(err, ErrorType::UndefinedSyntax)
@@ -261,10 +277,10 @@ mod test {
     fn unary_op() {
         eq!(nodes("2 meter"), bod!(n(2) * u("meter")));
         eq!(nodes("345meter"), bod!(n(345) * u("meter")));
-        eq!(nodes("- meter"), bod!(n(-1) * u("meter")));
+        eq!(nodes("- meter"), bod!(unry_sub(u("meter"))));
         eq!(
             nodes("- meter * -s"),
-            bod!((n(-1) * u("meter")) * (n(-1) * u("s")))
+            bod!((unry_sub(u("meter"))) * (unry_sub(u("s"))))
         );
         assert!(!parse("+ meter").1.is_empty());
     }

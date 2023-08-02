@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::types::*;
 
-use ariadne::{Source, Color, Label, Report, ReportKind};
+use ariadne::{Color, Label, Report, ReportKind, Source};
 use chumsky::{
     error::{RichPattern, RichReason},
     prelude::Input,
@@ -81,7 +81,9 @@ impl ErrorType {
         match self {
             CouldNotLex => "CouldNotLex: unknown character found while lexing",
             UndefinedSyntax => "UndefinedSynax: parser encountered syntax error",
-            UnsupportedAttribute => "UnsupportedAttribute: object does not support the specified attribute",
+            UnsupportedAttribute => {
+                "UnsupportedAttribute: object does not support the specified attribute"
+            }
             UndefinedIdent => "UndefinedIdent: encountered undefined identifier at runtime",
             TypeError => "UnsupportedType: type is not compatible",
             ZeroDivision => "ZeroDivision: encountered zero division at runtime",

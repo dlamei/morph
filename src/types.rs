@@ -37,6 +37,8 @@ pub enum Token<'a> {
     Sub,
     #[token("^")]
     Pow,
+    #[token("!")]
+    Not,
     #[token("=")]
     Assign,
     #[token("+=")]
@@ -95,6 +97,7 @@ impl fmt::Display for Token<'_> {
             Add => "+",
             Sub => "-",
             Pow => "^",
+            Not => "!",
             Assign => "=",
             AddAssign => "+=",
             SubAssign => "-=",
@@ -126,6 +129,9 @@ pub enum NodeType<'a> {
     Sub(Box<Node<'a>>, Box<Node<'a>>),
     Mul(Box<Node<'a>>, Box<Node<'a>>),
     Div(Box<Node<'a>>, Box<Node<'a>>),
+    Pow(Box<Node<'a>>, Box<Node<'a>>),
+    UnrySub(Box<Node<'a>>),
+    UnryNot(Box<Node<'a>>),
     Unit(&'a str),
     Num(NumType),
 
@@ -165,6 +171,15 @@ impl<'a> Node<'a> {
         }
     }
 
+    pub fn pow(n1: Node<'a>, n2: Node<'a>) -> Self {
+        let span = merge_ranges(&n1.span, &n2.span);
+
+        Self {
+            typ: NodeType::Pow(n1.into(), n2.into()),
+            span,
+        }
+    }
+
     pub fn err<I: Into<Range<usize>>>(range: I) -> Self {
         Self {
             typ: NodeType::ParseError,
@@ -196,10 +211,13 @@ impl<'a> fmt::Display for Node<'a> {
 
         match &self.typ {
             Def(name) => write!(f, "(def {})", name),
-            Add(left, right) => write!(f, "({} + {})", left, right),
-            Sub(left, right) => write!(f, "({} - {})", left, right),
-            Mul(left, right) => write!(f, "({} * {})", left, right),
-            Div(left, right) => write!(f, "({} / {})", left, right),
+            Add(lhs, rhs) => write!(f, "({} + {})", lhs, rhs),
+            Sub(lhs, rhs) => write!(f, "({} - {})", lhs, rhs),
+            Mul(lhs, rhs) => write!(f, "({} * {})", lhs, rhs),
+            Div(lhs, rhs) => write!(f, "({} / {})", lhs, rhs),
+            Pow(lhs, rhs) => write!(f, "{} ^ ({})", lhs, rhs),
+            UnrySub(val) => write!(f, "(- {})", val),
+            UnryNot(val) => write!(f, "(! {})", val),
             Unit(unit) => write!(f, "{}", unit),
             Num(num_type) => write!(f, "{}", num_type),
             Assign(name, val) => write!(f, "({} = {})", name, val),
@@ -397,7 +415,7 @@ impl<'a> Quantity<'a> {
         Self {
             value: value.into(),
             unit,
-            span
+            span,
         }
     }
 
@@ -405,7 +423,7 @@ impl<'a> Quantity<'a> {
         Self {
             value: num!(1),
             unit: UnitAtom::base(name).into(),
-            span
+            span,
         }
     }
 
@@ -413,7 +431,7 @@ impl<'a> Quantity<'a> {
         Self {
             value: value.into(),
             unit: Unit::none(),
-            span
+            span,
         }
     }
 }
@@ -454,7 +472,14 @@ impl<'a> ops::Add for Quantity<'a> {
             Ok(res)
         } else {
             let span = merge_ranges(&self.span, &rhs.span);
-            Err(MorphError::custom(span.into(), format!("non-conformable units for +: ({} + {})", self.unit, rhs.unit), ErrorType::TypeError))
+            Err(MorphError::custom(
+                span.into(),
+                format!(
+                    "non-conformable units for +: ({} + {})",
+                    self.unit, rhs.unit
+                ),
+                ErrorType::TypeError,
+            ))
         }
     }
 }
@@ -485,11 +510,35 @@ impl<'a> ops::Div for Quantity<'a> {
     fn div(self, rhs: Self) -> Self::Output {
         if rhs.value.is_zero() {
             let span = merge_ranges(&self.span, &rhs.span);
-            Err(MorphError::custom(span.into(), format!("division by zero"), ErrorType::ZeroDivision))
+            Err(MorphError::custom(
+                span.into(),
+                "division by zero".to_string(),
+                ErrorType::ZeroDivision,
+            ))
         } else {
             let res = self.unit / rhs.unit;
             let span = merge_ranges(&self.span, &rhs.span);
             Ok(Quantity::new(self.value / rhs.value, res, span))
+        }
+    }
+}
+
+impl<'a> ops::Neg for Quantity<'a> {
+    type Output = RuntimeResult<'a>;
+
+    fn neg(self) -> Self::Output {
+        Quantity::num(-1, self.span.clone()) * self
+    }
+}
+
+impl<'a> ops::Not for Quantity<'a> {
+    type Output = RuntimeResult<'a>;
+
+    fn not(self) -> Self::Output {
+        if self.value.is_zero() {
+            Ok(Quantity::new(1, self.unit, self.span))
+        } else {
+            Ok(Quantity::new(0, self.unit, self.span))
         }
     }
 }

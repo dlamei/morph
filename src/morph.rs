@@ -25,12 +25,12 @@ pub fn run(file_name: &str, src: &str) {
     }
 
     if !errors.is_empty() {
-        return
+        return;
     }
 
     if let Some(ast) = root {
-        let context = Context::new();
-        match ast.eval(context) {
+        let mut context = Context::new();
+        match ast.eval(&mut context) {
             Ok(res) => println!("{}", res),
             Err(err) => err.report(file_name, src),
         }
@@ -78,6 +78,10 @@ pub mod test_utils {
 
     pub fn n<I: Into<Decimal>>(val: I) -> Node<'static> {
         Node::new(NodeType::Num(val.into()), 0..0)
+    }
+
+    pub fn unry_sub(n: Node) -> Node {
+        Node::new(NodeType::UnrySub(n.into()), 0..0)
     }
 
     type Reason<'a> = chumsky::error::RichReason<'a, Token<'a>, &'a str>;
