@@ -4,7 +4,6 @@ use crate::error::*;
 use crate::types::*;
 
 use chumsky::{input::ValueInput, prelude::*, primitive};
-// use rust_decimal_macros::dec;
 
 macro_rules! merge_expected {
     ($err: ident ::<$I: ty>, $exp_tok: expr) => {{
@@ -114,8 +113,8 @@ impl<'a> Node<'a> {
 
             let product = unary.clone().foldl(
                 choice((
-                    just(Token::Mul).to(ops::Mul::mul as fn(_, _) -> _),
-                    just(Token::Div).to(ops::Div::div as fn(_, _) -> _),
+                    just(Token::Mul).to(Node::mul as fn(_, _) -> _),
+                    just(Token::Div).to(Node::div as fn(_, _) -> _),
                 ))
                 .then(unary)
                 .repeated(),
@@ -124,8 +123,8 @@ impl<'a> Node<'a> {
 
             let sum = product.clone().foldl(
                 choice((
-                    just(Token::Add).to(ops::Add::add as fn(_, _) -> _),
-                    just(Token::Sub).to(ops::Sub::sub as fn(_, _) -> _),
+                    just(Token::Add).to(Node::add as fn(_, _) -> _),
+                    just(Token::Sub).to(Node::sub as fn(_, _) -> _),
                 ))
                 .then(product)
                 .repeated(),
@@ -187,25 +186,6 @@ impl<'a> Node<'a> {
                 .collect::<Vec<_>>()
                 .map_with_span(|x, span| Node::new(NodeType::Scope(x), span))
         });
-
-        // let scopes =
-        //     just(Token::NL)
-        //     .repeated()
-        //     .ignore_then(
-        //         expr.then_ignore(choice((just(Token::NL).repeated().at_least(1), end())))
-        //             .map_err(|mut err: ParseError| {
-        //                 set_err_type!(err, ParseErrorType::UndefinedSyntax)
-        //             })
-        //             .recover_with(via_parser(
-        //                 none_of([Token::NL])
-        //                     .repeated()
-        //                     .at_least(1)
-        //                     .map_with_span(|_, span| Node::err(span)),
-        //             )),
-        //     )
-        //     .repeated()
-        //     .collect::<Vec<_>>()
-        //     .map_with_span(|x, span| Node::new(NodeType::Scope(x), span));
 
         let empty = just(Token::NL)
             .repeated()
@@ -311,7 +291,6 @@ mod test {
     #[test]
     fn syntax_err() {
         assert!(!parse("def me$ter").1.is_empty());
-        assert!(!parse("me<er").1.is_empty());
     }
 
     #[test]

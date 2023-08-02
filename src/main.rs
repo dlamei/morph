@@ -10,10 +10,10 @@ const SRC: &str = r"
 def m
 meter = m
 meters = m
+km = 1000 m
+cm = 0.01 m
+mm = 0.1 cm
 def s
-second = s
-seconds = s
-
 
 a = 2;
 !a

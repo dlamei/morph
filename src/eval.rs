@@ -65,7 +65,7 @@ impl<'a> ContextCore<'a> {
     }
 
     pub fn unit(&mut self, name: &'a str, span: Range<usize>) -> RuntimeResult<'a> {
-        // self.base_units.get(name).map(|x| x.clone().into())
+        // self.base_units.get(name).map(|x| x.clone())
         let found = self.base_units.get_mut(name).map(|x| {
             let mut ret = x.clone();
             ret.span = span.clone();
@@ -202,6 +202,13 @@ impl<'a> Node<'a> {
                 let res = var / rhs.eval(cntxt)?;
                 cntxt.assign(lhs, res?, span)
             }
+            Equal(lhs, rhs) => lhs.eval(cntxt.clone())?.equal(&rhs.eval(cntxt)?),
+            NeEqual(lhs, rhs) => (lhs.eval(cntxt.clone())?.equal(&rhs.eval(cntxt)?))?.not(),
+            GreaterEqual(lhs, rhs) => lhs.eval(cntxt.clone())?.greater_eq(&rhs.eval(cntxt)?),
+            LesserEqual(lhs, rhs) => lhs.eval(cntxt.clone())?.lesser_eq(&rhs.eval(cntxt)?),
+            Greater(lhs, rhs) => lhs.eval(cntxt.clone())?.greater(&rhs.eval(cntxt)?),
+            Lesser(lhs, rhs) => lhs.eval(cntxt.clone())?.lesser(&rhs.eval(cntxt)?),
+
             Scope(vec) => {
                 let mut res: Option<RuntimeResult<'a>> = None;
 

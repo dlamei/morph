@@ -118,9 +118,13 @@ impl fmt::Display for MorphError<'_> {
 }
 
 impl<'a> MorphError<'a> {
-    pub fn custom<M: ToString>(span: SimpleSpan<usize>, msg: M, typ: ErrorType) -> Self {
+    pub fn custom<M: ToString, I: Into<SimpleSpan<usize>>>(
+        span: I,
+        msg: M,
+        typ: ErrorType,
+    ) -> Self {
         Self {
-            span,
+            span: span.into(),
             reason: Box::new(RichReason::Custom(msg.to_string())),
             typ,
         }

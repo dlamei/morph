@@ -1,8 +1,10 @@
-use std::{cmp, fmt, ops, ops::Range, str::FromStr};
+use std::{cmp, fmt, ops, ops::Range, str::FromStr, stringify};
 
 use logos::Logos;
 use paste::paste;
 
+// use num_traits::Pow;
+// use num_traits::pow::Pow;
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 
@@ -13,14 +15,6 @@ use crate::error::*;
 fn decimal<'a>(lex: &mut logos::Lexer<'a, Token<'a>>) -> Option<Decimal> {
     Decimal::from_str(lex.slice()).ok()
 }
-
-macro_rules! num {
-    ($e: expr) => {
-        dec!($e)
-    };
-}
-
-pub(crate) use num;
 
 #[derive(Logos, Debug, PartialEq, Clone)]
 #[logos(skip r"([ \t\f]+|//.*)")]
@@ -49,8 +43,19 @@ pub enum Token<'a> {
     MulAssign,
     #[token("/=")]
     DivAssign,
-    #[token("^=")]
-    PowAssign,
+
+    #[token("==")]
+    Equal,
+    #[token("!=")]
+    NeEqual,
+    #[token(">=")]
+    GreaterEqual,
+    #[token("<=")]
+    LesserEqual,
+    #[token(">")]
+    Greater,
+    #[token("<")]
+    Lesser,
 
     #[token("(")]
     LParen,
@@ -71,7 +76,6 @@ pub enum Token<'a> {
     #[regex("(?&unicode_ident)", |lex| lex.slice())]
     Unit(&'a str),
 
-    // #[regex("[0-9]+", |lex| lex.slice().parse().ok())]
     #[regex(r"(([0-9]+)(\.[0-9]+))", decimal)]
     #[regex("[0-9]+", decimal)]
     Num(NumType),
@@ -83,7 +87,7 @@ pub enum Token<'a> {
 }
 
 impl<'a> Token<'a> {
-    pub const NUM: Self = Self::Num(num!(0));
+    pub const NUM: Self = Self::Num(dec!(0));
     pub const UNIT: Self = Self::Unit("...");
 }
 
@@ -103,7 +107,6 @@ impl fmt::Display for Token<'_> {
             SubAssign => "-=",
             MulAssign => "*=",
             DivAssign => "/=",
-            PowAssign => "^=",
             LParen => "(",
             RParen => ")",
             LCurly => "{",
@@ -115,6 +118,12 @@ impl fmt::Display for Token<'_> {
             Num(_) => "NUM",
             NL => r"(\n or ;)",
             LexErr(msg) => return write!(f, "Lexer Error: {msg}"),
+            Equal => "==",
+            NeEqual => "!=",
+            GreaterEqual => ">=",
+            LesserEqual => "<=",
+            Greater => ">",
+            Lesser => "<",
         };
 
         write!(f, "{}", res)
@@ -141,12 +150,19 @@ pub enum NodeType<'a> {
     MulAssign(&'a str, Box<Node<'a>>),
     DivAssign(&'a str, Box<Node<'a>>),
 
+    Equal(Box<Node<'a>>, Box<Node<'a>>),
+    NeEqual(Box<Node<'a>>, Box<Node<'a>>),
+    GreaterEqual(Box<Node<'a>>, Box<Node<'a>>),
+    LesserEqual(Box<Node<'a>>, Box<Node<'a>>),
+    Greater(Box<Node<'a>>, Box<Node<'a>>),
+    Lesser(Box<Node<'a>>, Box<Node<'a>>),
+
     Scope(Vec<Node<'a>>),
 
     ParseError,
 }
 
-pub fn merge_ranges(r1: &Range<usize>, r2: &Range<usize>) -> Range<usize> {
+pub fn merge_span(r1: &Range<usize>, r2: &Range<usize>) -> Range<usize> {
     let mut smaller = r1;
     let mut bigger = r2;
     if r2.start < r1.start {
@@ -161,6 +177,16 @@ pub fn merge_ranges(r1: &Range<usize>, r2: &Range<usize>) -> Range<usize> {
 pub struct Node<'a> {
     pub typ: NodeType<'a>,
     pub span: Range<usize>,
+}
+
+macro_rules! wrap_binop_node {
+    (binop: $fn_name: ident -> $op: ident) => {
+        pub fn $fn_name(lhs: Node<'a>, rhs: Node<'a>) -> Self {
+            let span = merge_span(&lhs.span, &rhs.span);
+            let typ = NodeType::$op(lhs.into(), rhs.into());
+            Node { typ, span }
+        }
+    };
 }
 
 impl<'a> Node<'a> {
@@ -190,13 +216,20 @@ impl<'a> Node<'a> {
     #[allow(dead_code)]
     pub fn assign(&mut self, other: Node<'a>) {
         if let NodeType::Unit(name) = self.typ {
-            let range = merge_ranges(&self.span, &other.span);
+            let range = merge_span(&self.span, &other.span);
             let typ = NodeType::Assign(name, other.into());
             *self = Node { typ, span: range };
         } else {
             panic!("You can only Assign to the Node::Unit enum");
         }
     }
+
+    wrap_binop_node!(binop: equal -> Equal);
+    wrap_binop_node!(binop: mul -> Mul);
+    wrap_binop_node!(binop: div -> Div);
+    wrap_binop_node!(binop: add -> Add);
+    wrap_binop_node!(binop: sub -> Sub);
+    wrap_binop_node!(binop: pow -> Pow);
 }
 
 impl<'a> From<Node<'a>> for NodeType<'a> {
@@ -225,6 +258,12 @@ impl<'a> fmt::Display for Node<'a> {
             SubAssign(name, val) => write!(f, "({} -= {})", name, val),
             MulAssign(name, val) => write!(f, "({} *= {})", name, val),
             DivAssign(name, val) => write!(f, "({} /= {})", name, val),
+            Equal(lhs, rhs) => write!(f, "({} == {})", lhs, rhs),
+            NeEqual(lhs, rhs) => write!(f, "({} != {})", lhs, rhs),
+            GreaterEqual(lhs, rhs) => write!(f, "({} >= {})", lhs, rhs),
+            LesserEqual(lhs, rhs) => write!(f, "({} <= {})", lhs, rhs),
+            Greater(lhs, rhs) => write!(f, "({} > {})", lhs, rhs),
+            Lesser(lhs, rhs) => write!(f, "({} < {})", lhs, rhs),
             Scope(nodes) => {
                 writeln!(f, "{{")?;
                 for n in nodes {
@@ -237,25 +276,30 @@ impl<'a> fmt::Display for Node<'a> {
     }
 }
 
-impl<'a> std::cmp::PartialEq for Node<'a> {
+impl<'a> cmp::PartialEq for Node<'a> {
     fn eq(&self, other: &Self) -> bool {
         self.typ == other.typ
     }
 }
 
 macro_rules! impl_node_op {
-    (binop: $op: ident) => {
+
+    (binop: $op: ident -> $n_op: ident) => {
         impl<'a> std::ops::$op<Node<'a>> for Node<'a> {
             type Output = Node<'a>;
 
             paste! {
-                fn [<$op:snake>](self, rhs: Node<'a>) -> Self::Output {
-                    let span = merge_ranges(&self.span, &rhs.span);
-                    let typ = NodeType::$op(self.into(), rhs.into());
+                fn [<$op:lower>](self, rhs: Node<'a>) -> Self::Output {
+                    let span = merge_span(&self.span, &rhs.span);
+                    let typ = NodeType::$n_op(self.into(), rhs.into());
                     Node {typ, span}
                 }
             }
         }
+    };
+
+    (binop: $op: ident) => {
+        impl_node_op!(binop: $op -> $op);
     };
 
     (assign: $op: ident) => {
@@ -264,7 +308,7 @@ macro_rules! impl_node_op {
                 fn [<$op:snake>](&mut self, other: Self) {
                     // Self::Output::$op(self.into(), rhs.into())
                     if let NodeType::Unit(name) = self.typ {
-                        let span = merge_ranges(&self.span, &other.span);
+                        let span = merge_span(&self.span, &other.span);
                         let typ = NodeType::$op(name, other.into());
                         *self = Node {typ, span}
                     } else {
@@ -280,6 +324,7 @@ impl_node_op!(binop: Mul);
 impl_node_op!(binop: Div);
 impl_node_op!(binop: Add);
 impl_node_op!(binop: Sub);
+impl_node_op!(binop: BitXor -> Pow);
 
 impl_node_op!(assign: AddAssign);
 impl_node_op!(assign: SubAssign);
@@ -294,13 +339,13 @@ pub struct UnitAtom<'a> {
 
 impl<'a> UnitAtom<'a> {
     pub fn base(name: &'a str) -> Self {
-        Self { name, exp: num!(1) }
+        Self { name, exp: dec!(1) }
     }
 }
 
 impl<'a> fmt::Display for UnitAtom<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.exp.is_integer() && self.exp == num!(1) {
+        if self.exp.is_integer() && self.exp == dec!(1) {
             write!(f, "{}", self.name)
         } else {
             write!(f, "{}^{}", self.name, self.exp)
@@ -444,7 +489,7 @@ impl<'a> ops::Div for Unit<'a> {
 
     fn div(self, rhs: Self) -> Self::Output {
         let mut res = rhs.clone();
-        res.0.iter_mut().for_each(|u| u.exp *= num!(-1));
+        res.0.iter_mut().for_each(|u| u.exp *= dec!(-1));
 
         self * res
     }
@@ -455,6 +500,34 @@ pub struct Quantity<'a> {
     pub value: Decimal,
     pub unit: Unit<'a>,
     pub span: Range<usize>,
+}
+
+macro_rules! impl_quantity_cmp {
+
+    ($sym: tt -> $fn_name: ident) => {
+        pub fn $fn_name(&self, rhs: &Quantity<'a>) -> RuntimeResult<'a> {
+            let span = merge_span(&self.span, &rhs.span);
+
+            if self.unit != rhs.unit {
+                return Err(MorphError::custom(
+                    span,
+                    format!(
+                        "non-conformable units for '{}': ({} + {})",
+                        stringify!($sym),
+                        self.unit, rhs.unit
+                    ),
+                    ErrorType::TypeError,
+                ));
+            }
+
+            if self.value $sym rhs.value {
+                Ok(Quantity::num(dec!(1), span))
+            } else {
+                Ok(Quantity::num(dec!(0), span))
+            }
+        }
+    }
+
 }
 
 impl<'a> Quantity<'a> {
@@ -468,7 +541,7 @@ impl<'a> Quantity<'a> {
 
     pub fn base(name: &'a str, span: Range<usize>) -> Self {
         Self {
-            value: num!(1),
+            value: dec!(1),
             unit: UnitAtom::base(name).into(),
             span,
         }
@@ -481,7 +554,6 @@ impl<'a> Quantity<'a> {
             span,
         }
     }
-}
 
 impl<'a> std::cmp::PartialEq for Quantity<'a> {
     fn eq(&self, other: &Self) -> bool {
@@ -542,7 +614,7 @@ impl<'a> ops::Sub for Quantity<'a> {
 
     fn sub(self, rhs: Self) -> Self::Output {
         let mut res = rhs.clone();
-        res.value *= num!(-1);
+        res.value *= dec!(-1);
         self + res
     }
 }
@@ -551,8 +623,13 @@ impl<'a> ops::Mul for Quantity<'a> {
     type Output = RuntimeResult<'a>;
 
     fn mul(self, rhs: Self) -> Self::Output {
+        let span = merge_span(&self.span, &rhs.span);
+
+        if self.value.is_zero() || rhs.value.is_zero() {
+            return Ok(Quantity::num(dec!(0), span));
+        }
+
         let res = self.unit * rhs.unit;
-        let span = merge_ranges(&self.span, &rhs.span);
         Ok(Quantity::new(self.value * rhs.value, res, span))
     }
 }
@@ -561,6 +638,8 @@ impl<'a> ops::Div for Quantity<'a> {
     type Output = RuntimeResult<'a>;
 
     fn div(self, rhs: Self) -> Self::Output {
+        let span = merge_span(&self.span, &rhs.span);
+
         if rhs.value.is_zero() {
             let span = merge_ranges(&self.span, &rhs.span);
             Err(MorphError::custom(
@@ -570,7 +649,6 @@ impl<'a> ops::Div for Quantity<'a> {
             ))
         } else {
             let res = self.unit / rhs.unit;
-            let span = merge_ranges(&self.span, &rhs.span);
             Ok(Quantity::new(self.value / rhs.value, res, span))
         }
     }
