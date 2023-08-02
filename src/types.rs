@@ -502,34 +502,6 @@ pub struct Quantity<'a> {
     pub span: Range<usize>,
 }
 
-macro_rules! impl_quantity_cmp {
-
-    ($sym: tt -> $fn_name: ident) => {
-        pub fn $fn_name(&self, rhs: &Quantity<'a>) -> RuntimeResult<'a> {
-            let span = merge_span(&self.span, &rhs.span);
-
-            if self.unit != rhs.unit {
-                return Err(MorphError::custom(
-                    span,
-                    format!(
-                        "non-conformable units for '{}': ({} + {})",
-                        stringify!($sym),
-                        self.unit, rhs.unit
-                    ),
-                    ErrorType::TypeError,
-                ));
-            }
-
-            if self.value $sym rhs.value {
-                Ok(Quantity::num(dec!(1), span))
-            } else {
-                Ok(Quantity::num(dec!(0), span))
-            }
-        }
-    }
-
-}
-
 impl<'a> Quantity<'a> {
     pub fn new<I: Into<Decimal>>(value: I, unit: Unit<'a>, span: Range<usize>) -> Self {
         Self {
@@ -554,6 +526,7 @@ impl<'a> Quantity<'a> {
             span,
         }
     }
+}
 
 impl<'a> std::cmp::PartialEq for Quantity<'a> {
     fn eq(&self, other: &Self) -> bool {
