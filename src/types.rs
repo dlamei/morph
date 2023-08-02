@@ -179,16 +179,6 @@ pub struct Node<'a> {
     pub span: Range<usize>,
 }
 
-macro_rules! wrap_binop_node {
-    (binop: $fn_name: ident -> $op: ident) => {
-        pub fn $fn_name(lhs: Node<'a>, rhs: Node<'a>) -> Self {
-            let span = merge_span(&lhs.span, &rhs.span);
-            let typ = NodeType::$op(lhs.into(), rhs.into());
-            Node { typ, span }
-        }
-    };
-}
-
 impl<'a> Node<'a> {
     pub fn new<I: Into<Range<usize>>>(typ: NodeType<'a>, range: I) -> Self {
         Self {
@@ -198,7 +188,7 @@ impl<'a> Node<'a> {
     }
 
     pub fn pow(n1: Node<'a>, n2: Node<'a>) -> Self {
-        let span = merge_ranges(&n1.span, &n2.span);
+        let span = merge_span(&n1.span, &n2.span);
 
         Self {
             typ: NodeType::Pow(n1.into(), n2.into()),
@@ -223,13 +213,6 @@ impl<'a> Node<'a> {
             panic!("You can only Assign to the Node::Unit enum");
         }
     }
-
-    wrap_binop_node!(binop: equal -> Equal);
-    wrap_binop_node!(binop: mul -> Mul);
-    wrap_binop_node!(binop: div -> Div);
-    wrap_binop_node!(binop: add -> Add);
-    wrap_binop_node!(binop: sub -> Sub);
-    wrap_binop_node!(binop: pow -> Pow);
 }
 
 impl<'a> From<Node<'a>> for NodeType<'a> {
@@ -569,7 +552,7 @@ impl<'a> ops::Add for Quantity<'a> {
             res.value += rhs.value;
             Ok(res)
         } else {
-            let span = merge_ranges(&self.span, &rhs.span);
+            let span = merge_span(&self.span, &rhs.span);
             Err(MorphError::custom(
                 span.into(),
                 format!(
@@ -614,7 +597,7 @@ impl<'a> ops::Div for Quantity<'a> {
         let span = merge_span(&self.span, &rhs.span);
 
         if rhs.value.is_zero() {
-            let span = merge_ranges(&self.span, &rhs.span);
+            let span = merge_span(&self.span, &rhs.span);
             Err(MorphError::custom(
                 span.into(),
                 "division by zero".to_string(),
