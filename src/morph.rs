@@ -66,23 +66,7 @@ pub mod test_utils {
 
     pub(crate) use bod;
     pub(crate) use eq;
-    use rust_decimal::Decimal;
-
-    pub fn u(name: &str) -> Node {
-        Node::new(NodeType::Unit(name), 0..0)
-    }
-
-    pub fn d(name: &str) -> Node {
-        Node::new(NodeType::Def(name), 0..0)
-    }
-
-    pub fn n<I: Into<Decimal>>(val: I) -> Node<'static> {
-        Node::new(NodeType::Num(val.into()), 0..0)
-    }
-
-    pub fn unry_sub(n: Node) -> Node {
-        Node::new(NodeType::UnrySub(n.into()), 0..0)
-    }
+    // use rust_decimal::Decimal;
 
     type Reason<'a> = chumsky::error::RichReason<'a, Token<'a>, &'a str>;
     type Pattern<'a> = chumsky::error::RichPattern<'a, Token<'a>, &'a str>;
@@ -111,7 +95,48 @@ pub mod test_utils {
         morph::parse(code)
     }
 
-    pub fn nodes(code: &str) -> NodeType {
+    pub fn node_types(code: &str) -> NodeType {
         morph::parse(code).0.unwrap().into()
+    }
+
+    pub fn nodes(code: &str) -> Node {
+        morph::parse(code).0.unwrap()
+    }
+
+    pub fn run(code: &'static str) -> morph::RuntimeResult<'static> {
+        let ast = nodes(code);
+        let mut context = morph::Context::new();
+        ast.eval(&mut context)
+        // morph::run("<TEST>", code)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{
+        morph::test_utils::*,
+        types::{Quantity, Unit},
+    };
+    use rust_decimal::Decimal;
+
+    fn n<I: Into<Decimal>>(val: I) -> Quantity<'static> {
+        Quantity::num(val, 0..0)
+    }
+
+    fn u<I: Into<Decimal>>(val: I, unit: &'static str) -> Quantity<'static> {
+        Quantity::new(val, Unit::base(unit), 0..0)
+    }
+
+    #[test]
+    fn unary_op() {
+        eq!(run("!0").unwrap(), n(1));
+        eq!(run("!1").unwrap(), n(0));
+        eq!(run("def m; !m").unwrap(), u(0, "m"));
+        eq!(run("def m; !0m").unwrap(), u(1, "m"));
+    }
+
+    #[test]
+    fn expr() {
+        eq!(run("def m; def s; m * s"), u(1, "m") * u(1, "s"))
     }
 }

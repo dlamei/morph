@@ -218,26 +218,48 @@ impl<'a> Node<'a> {
 
 #[cfg(test)]
 mod test {
+    use rust_decimal::Decimal;
+
     use crate::{error::*, morph::test_utils::*, types::*};
+
+    fn u(name: &str) -> Node {
+        Node::new(NodeType::Unit(name), 0..0)
+    }
+
+    fn d(name: &str) -> Node {
+        Node::new(NodeType::Def(name), 0..0)
+    }
+
+    fn n<I: Into<Decimal>>(val: I) -> Node<'static> {
+        Node::new(NodeType::Num(val.into()), 0..0)
+    }
+
+    fn unry_sub(n: Node) -> Node {
+        Node::new(NodeType::UnrySub(n.into()), 0..0)
+    }
+
+    fn unry_not(n: Node) -> Node {
+        Node::new(NodeType::UnryNot(n.into()), 0..0)
+    }
 
     #[test]
     fn basic_expr() {
-        eq!(nodes(""), bod!());
-        eq!(nodes(";;\n;\n\n"), bod!());
-        eq!(nodes("def m \n m * s"), bod!(d("m"), u("m") * u("s")));
+        eq!(node_types(""), bod!());
+        eq!(node_types(";;\n;\n\n"), bod!());
+        eq!(node_types("def m \n m * s"), bod!(d("m"), u("m") * u("s")));
         eq!(
-            nodes("a + b * c + d"),
+            node_types("a + b * c + d"),
             bod!(u("a") + u("b") * u("c") + u("d"))
         );
         eq!(
-            nodes("a * (b + c) * d"),
+            node_types("a * (b + c) * d"),
             bod!(u("a") * (u("b") + u("c")) * u("d"))
         );
     }
 
     #[test]
     fn def() {
-        eq!(nodes("def m"), bod!(d("m")));
+        eq!(node_types("def m"), bod!(d("m")));
         assert!(!parse("def \n").1.is_empty());
         assert!(!parse("def 2").1.is_empty());
         assert!(cmp_expected(
@@ -248,40 +270,41 @@ mod test {
 
     #[test]
     fn binop() {
-        eq!(nodes("m / s"), bod!(u("m") / u("s")));
-        eq!(nodes("m * s"), bod!(u("m") * u("s")));
-        eq!(nodes("m - s"), bod!(u("m") - u("s")));
-        eq!(nodes("m + s"), bod!(u("m") + u("s")));
+        eq!(node_types("m / s"), bod!(u("m") / u("s")));
+        eq!(node_types("m * s"), bod!(u("m") * u("s")));
+        eq!(node_types("m - s"), bod!(u("m") - u("s")));
+        eq!(node_types("m + s"), bod!(u("m") + u("s")));
     }
 
     #[test]
     fn assign() {
         let mut a = u("a");
         a.assign(n(2) / n(3) + n(2));
-        eq!(nodes("a = 2 / 3 + 2"), bod!(a));
+        eq!(node_types("a = 2 / 3 + 2"), bod!(a));
 
         let mut b = u("b");
         b += u("m") + n(3) * n(2);
-        eq!(nodes("b += m + 3 * 2"), bod!(b));
+        eq!(node_types("b += m + 3 * 2"), bod!(b));
 
         let mut c = u("c");
         c *= u("m") / u("s");
-        eq!(nodes("c *= m / s"), bod!(c));
+        eq!(node_types("c *= m / s"), bod!(c));
 
         let mut d = u("d");
         d /= n(0);
-        eq!(nodes("d /= 0"), bod!(d));
+        eq!(node_types("d /= 0"), bod!(d));
     }
 
     #[test]
     fn unary_op() {
-        eq!(nodes("2 meter"), bod!(n(2) * u("meter")));
-        eq!(nodes("345meter"), bod!(n(345) * u("meter")));
-        eq!(nodes("- meter"), bod!(unry_sub(u("meter"))));
+        eq!(node_types("2 meter"), bod!(n(2) * u("meter")));
+        eq!(node_types("345meter"), bod!(n(345) * u("meter")));
+        eq!(node_types("- meter"), bod!(unry_sub(u("meter"))));
         eq!(
-            nodes("- meter * -s"),
+            node_types("- meter * -s"),
             bod!((unry_sub(u("meter"))) * (unry_sub(u("s"))))
         );
+        eq!(node_types("!0"), bod!(unry_not(n(0))));
         assert!(!parse("+ meter").1.is_empty());
     }
 

@@ -168,10 +168,14 @@ impl<'a> Node<'a> {
             Div(lhs, rhs) => lhs.eval(cntxt)? / rhs.eval(cntxt)?,
             Pow(_, _) => todo!(),
             UnrySub(val) => {
+                #[allow(clippy::let_and_return)]
                 let neg = -val.eval(cntxt)?;
                 neg
             }
-            UnryNot(_) => todo!(),
+            UnryNot(val) => {
+                let not = !val.eval(cntxt)?;
+                not
+            }
             Unit(name) => cntxt.unit_or_var(name, span),
             Num(num) => Ok(Quantity::num(num, span)),
             Assign(name, val) => {

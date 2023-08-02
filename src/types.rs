@@ -315,6 +315,10 @@ impl<'a> Unit<'a> {
     pub fn none() -> Self {
         Unit(vec![])
     }
+
+    pub fn base(name: &'a str) -> Self {
+        Unit(vec![UnitAtom::base(name)])
+    }
 }
 
 impl<'a> From<UnitAtom<'a>> for Unit<'a> {
@@ -322,6 +326,49 @@ impl<'a> From<UnitAtom<'a>> for Unit<'a> {
         Unit(vec![value])
     }
 }
+
+// impl<'a> From<&'a str> for Unit<'a> {
+//     fn from(value: &'a str) -> Self {
+//         let mut tokens: Vec<_> = value.split([' ', '*', '/']).collect();
+//         println!("{:?}", tokens);
+
+//         let tok = tokens.pop();
+
+//         if tok.is_none() {
+//             return Unit::none();
+//         }
+
+//         let token = tok.unwrap();
+//         let mut res = Unit::base(token);
+
+//         while let Some(tok) = tokens.pop() {
+//             match tok {
+//                 "*" => {
+//                     let t = tokens.pop();
+//                     if t.is_none() {
+//                         panic!("unit syntax error");
+//                     }
+//                     let t = t.unwrap();
+
+//                     res = Unit::base(token) * Unit::base(t);
+//                 }
+//                 "/" => {
+//                     let t = tokens.pop();
+//                     if t.is_none() {
+//                         panic!("unit syntax error");
+//                     }
+//                     let t = t.unwrap();
+
+//                     res = Unit::base(token) / Unit::base(t);
+//                 }
+//                 " " => continue,
+//                 _ => panic!("unit syntax error: {tok}"),
+//             }
+//         }
+
+//         res
+//     }
+// }
 
 impl<'a> fmt::Display for Unit<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -403,7 +450,7 @@ impl<'a> ops::Div for Unit<'a> {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Clone)]
 pub struct Quantity<'a> {
     pub value: Decimal,
     pub unit: Unit<'a>,
@@ -433,6 +480,12 @@ impl<'a> Quantity<'a> {
             unit: Unit::none(),
             span,
         }
+    }
+}
+
+impl<'a> std::cmp::PartialEq for Quantity<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value && self.unit == other.unit
     }
 }
 
