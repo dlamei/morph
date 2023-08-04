@@ -34,11 +34,6 @@ pub fn run(file_name: &str, src: &str) {
             Ok(res) => println!("{}", res),
             Err(err) => err.report(file_name, src),
         }
-        // if let Ok(res) = ast.clone().eval(context) {
-        //     println!("{}", res);
-        // } else {
-
-        // }
     } else {
         println!("ERROR: nothing was parsed");
     }

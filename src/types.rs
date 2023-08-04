@@ -3,6 +3,7 @@ use std::{cmp, fmt, ops, ops::Range, str::FromStr};
 use logos::Logos;
 use paste::paste;
 
+use num_traits::pow::Pow;
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 
@@ -146,7 +147,7 @@ pub enum NodeType<'a> {
     ParseError,
 }
 
-pub fn merge_ranges(r1: &Range<usize>, r2: &Range<usize>) -> Range<usize> {
+pub fn merge_spans(r1: &Range<usize>, r2: &Range<usize>) -> Range<usize> {
     let mut smaller = r1;
     let mut bigger = r2;
     if r2.start < r1.start {
@@ -172,7 +173,7 @@ impl<'a> Node<'a> {
     }
 
     pub fn pow(n1: Node<'a>, n2: Node<'a>) -> Self {
-        let span = merge_ranges(&n1.span, &n2.span);
+        let span = merge_spans(&n1.span, &n2.span);
 
         Self {
             typ: NodeType::Pow(n1.into(), n2.into()),
@@ -190,7 +191,7 @@ impl<'a> Node<'a> {
     #[allow(dead_code)]
     pub fn assign(&mut self, other: Node<'a>) {
         if let NodeType::Unit(name) = self.typ {
-            let range = merge_ranges(&self.span, &other.span);
+            let range = merge_spans(&self.span, &other.span);
             let typ = NodeType::Assign(name, other.into());
             *self = Node { typ, span: range };
         } else {
@@ -250,7 +251,7 @@ macro_rules! impl_node_op {
 
             paste! {
                 fn [<$op:snake>](self, rhs: Node<'a>) -> Self::Output {
-                    let span = merge_ranges(&self.span, &rhs.span);
+                    let span = merge_spans(&self.span, &rhs.span);
                     let typ = NodeType::$op(self.into(), rhs.into());
                     Node {typ, span}
                 }
@@ -264,7 +265,7 @@ macro_rules! impl_node_op {
                 fn [<$op:snake>](&mut self, other: Self) {
                     // Self::Output::$op(self.into(), rhs.into())
                     if let NodeType::Unit(name) = self.typ {
-                        let span = merge_ranges(&self.span, &other.span);
+                        let span = merge_spans(&self.span, &other.span);
                         let typ = NodeType::$op(name, other.into());
                         *self = Node {typ, span}
                     } else {
@@ -318,6 +319,21 @@ impl<'a> Unit<'a> {
 
     pub fn base(name: &'a str) -> Self {
         Unit(vec![UnitAtom::base(name)])
+    }
+
+    pub fn has_unit(&self) -> bool {
+        !self.0.is_empty()
+    }
+
+    pub fn pow<I: Into<Decimal>>(&mut self, exp: I) -> Self {
+        let mut res = self.clone();
+        let exp = exp.into();
+
+        for u in &mut res.0 {
+            u.exp *= exp;
+        }
+
+        res
     }
 }
 
@@ -469,7 +485,7 @@ impl<'a> Quantity<'a> {
     pub fn base(name: &'a str, span: Range<usize>) -> Self {
         Self {
             value: num!(1),
-            unit: UnitAtom::base(name).into(),
+            unit: Unit::base(name),
             span,
         }
     }
@@ -524,7 +540,7 @@ impl<'a> ops::Add for Quantity<'a> {
             res.value += rhs.value;
             Ok(res)
         } else {
-            let span = merge_ranges(&self.span, &rhs.span);
+            let span = merge_spans(&self.span, &rhs.span);
             Err(MorphError::custom(
                 span.into(),
                 format!(
@@ -552,7 +568,7 @@ impl<'a> ops::Mul for Quantity<'a> {
 
     fn mul(self, rhs: Self) -> Self::Output {
         let res = self.unit * rhs.unit;
-        let span = merge_ranges(&self.span, &rhs.span);
+        let span = merge_spans(&self.span, &rhs.span);
         Ok(Quantity::new(self.value * rhs.value, res, span))
     }
 }
@@ -562,7 +578,7 @@ impl<'a> ops::Div for Quantity<'a> {
 
     fn div(self, rhs: Self) -> Self::Output {
         if rhs.value.is_zero() {
-            let span = merge_ranges(&self.span, &rhs.span);
+            let span = merge_spans(&self.span, &rhs.span);
             Err(MorphError::custom(
                 span.into(),
                 "division by zero".to_string(),
@@ -570,7 +586,7 @@ impl<'a> ops::Div for Quantity<'a> {
             ))
         } else {
             let res = self.unit / rhs.unit;
-            let span = merge_ranges(&self.span, &rhs.span);
+            let span = merge_spans(&self.span, &rhs.span);
             Ok(Quantity::new(self.value / rhs.value, res, span))
         }
     }
@@ -593,5 +609,27 @@ impl<'a> ops::Not for Quantity<'a> {
         } else {
             Ok(Quantity::new(0, self.unit, self.span))
         }
+    }
+}
+
+impl<'a> ops::BitXor for Quantity<'a> {
+    type Output = RuntimeResult<'a>;
+
+    fn bitxor(mut self, rhs: Self) -> Self::Output {
+        let span = merge_spans(&self.span, &rhs.span);
+
+        if rhs.unit.has_unit() {
+            return Err(MorphError::custom(
+                span.into(),
+                format!("exponent must be unitless, found: {}", rhs.unit),
+                ErrorType::UnsupportedAttribute,
+            ));
+        }
+
+        let exp = rhs.value;
+        let res_val = self.value.pow(exp.clone());
+        let res_unit = self.unit.pow(exp);
+
+        Ok(Quantity::new(res_val, res_unit, span))
     }
 }

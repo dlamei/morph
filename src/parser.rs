@@ -85,7 +85,7 @@ impl<'a> Node<'a> {
                 expr.clone()
                     .delimited_by(just(Token::LParen), just(Token::RParen)),
                 scope_parser.delimited_by(just(Token::LCurly), just(Token::RCurly)),
-                parse!(num * unit),
+                // parse!(num * unit),
                 parse!(unit),
                 parse!(num),
                 def,
@@ -98,7 +98,10 @@ impl<'a> Node<'a> {
                 .then(atom.clone())
                 .map(|(n1, n2)| Node::pow(n1, n2));
 
-            let pow = choice((pow, atom.clone()));
+            let pow = choice((pow, atom));
+
+            let impl_mult = pow.clone().then(pow.clone()).map(|(p1, p2)| p1 * p2);
+            let impl_mult = choice((impl_mult, pow));
 
             let unary = choice((
                 just(Token::Sub).to(NodeType::UnrySub as fn(Box<Node<'a>>) -> NodeType<'a>),
@@ -106,7 +109,7 @@ impl<'a> Node<'a> {
             ))
             .map_with_span(|op, span| (op, span))
             .repeated()
-            .foldr(pow, |(op, span), val| {
+            .foldr(impl_mult, |(op, span), val| {
                 let typ = op(val.into());
                 Node::new(typ, span)
             })
@@ -306,6 +309,12 @@ mod test {
         );
         eq!(node_types("!0"), bod!(unry_not(n(0))));
         assert!(!parse("+ meter").1.is_empty());
+    }
+
+    #[test]
+    fn pow() {
+        eq!(node_types("2 ^ 3"), bod!(Node::pow(n(2), n(3))));
+        eq!(node_types("2m ^ 3"), bod!(n(2) * Node::pow(u("m"), n(3))));
     }
 
     #[test]
